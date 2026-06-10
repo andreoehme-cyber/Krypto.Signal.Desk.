@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>SignalDesk - Krypto Long/Short</title>
+<style>html,body,#root{margin:0;height:100%;background:#0B0F17;}</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+/* ============================================================================
+   SIGNAL DESK v2 — Live Krypto Long/Short Dashboard
+   Quellen (öffentlich, ohne API-Key, im Browser):
+   - CoinGecko   Preise / Volumen / Market Cap / Momentum + globaler Markt
+   - Bybit       Funding Rate, Open Interest, Long/Short-Ratio, neue Listings
+   - Phemex      Funding/OI (zusätzlich, plausibilitätsgeprüft)
+   - Dexscreener On-Chain Momentum, Liquidität, neue Token (Small-Caps)
+
+   Keine Anlageberatung. Signale = transparente Heuristiken zur Einordnung.
+============================================================================ */
+
+const C = {
+  ink: "#0B0F17", panel: "#121826", panel2: "#0F1521", line: "#23314A",
+  text: "#E7ECF5", muted: "#8A98B0", long: "#34D399", short: "#FF5C6C",
+  neutral: "#6B86B0", gold: "#F2B23E",
+};
+const FONTS = `@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');`;
+
+const CG_MARKETS =
+  "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=40&page=1&price_change_percentage=1h%2C24h%2C7d&sparkline=false";
+const CG_GLOBAL = "https://api.coingecko.com/api/v3/global";
+const CG_FX = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,eur";
+const BYBIT_TICKERS = "https://api.bybit.com/v5/market/tickers?category=linear";
+const BYBIT_INSTR = "https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000";
+const BYBIT_LS = (sym) =>
+  `https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=${sym}&period=1h&limit=1`;
+const PHEMEX_TICKERS = "https://api.phemex.com/md/v3/ticker/24hr/all";
+const DEX_BOOSTS = "https://api.dexscreener.com/token-boosts/top/v1";
+const DEX_TOKENS = "https://api.dexscreener.com/latest/dex/tokens/";
+const BYBIT_KLINE = (sym) => `https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=W&limit=200`;
+const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+
+/* ----------------------------- Formatierung ----------------------------- */
+let EURFX = null; // USD->EUR Faktor, wird beim Laden gesetzt
+const _cur = (v, sym) => {
+  if (v >= 1000) return sym + Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 });
+  if (v >= 1) return sym + v.toFixed(2);
+  if (v >= 0.01) return sym + v.toFixed(4);
+  if (v >= 0.0001) return sym + v.toFixed(6);
+  return sym + v.toExponential(2);
+};
+const _big = (v, sym) => sym + Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(v);
+const fmtPrice = (p) =>
+  p == null || isNaN(p) ? "—" : EURFX ? _cur(p, "$") + " / " + _cur(p * EURFX, "€") : _cur(p, "$");
+const fmtPct = (x) => (x == null || isNaN(x) ? "—" : (x >= 0 ? "+" : "") + x.toFixed(1) + "%");
+const fmtBig = (n) =>
+  n == null || isNaN(n) ? "—" : EURFX ? _big(n, "$") + " / " + _big(n * EURFX, "€") : _big(n, "$");
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const ageStr = (ms) => {
+  if (!ms) return "—";
+  const h = (Date.now() - ms) / 36e5;
+  if (h < 48) return Math.max(1, Math.round(h)) + "h";
+  return Math.round(h / 24) + "d";
+};
+const fmtAgo = (ms) => {
+  const h = (Date.now() - ms) / 36e5;
+  if (h < 1) return Math.max(1, Math.round(h * 60)) + " Min";
+  if (h < 48) return Math.round(h) + " Std";
+  return Math.round(h / 24) + " Tagen";
+};
+const fmtIn = (ms) => {
+  let s = (ms - Date.now()) / 1000;
+  if (s < 0) s = 0;
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}T ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+};
+const fmtDate = (ms) =>
+  new Date(ms).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+const fmtDay = (ms) =>
+  new Date(ms).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit" });
+
+/* ------------------------------- Scoring -------------------------------- */
+function scoreMajor(m) {
+  const { c7, c24, c1, funding, ls } = m;
+  const factors = [];
+
+  const s7 = clamp((c7 ?? 0) / 25, -1, 1);
+  if (c7 != null) factors.push({ label: `7-Tage-Trend ${fmtPct(c7)}`, dir: s7 });
+  const s24 = clamp((c24 ?? 0) / 10, -1, 1);
+  if (c24 != null) factors.push({ label: `24h-Momentum ${fmtPct(c24)}`, dir: s24 });
+  const s1 = clamp((c1 ?? 0) / 5, -1, 1);
+
+  let sF = 0;
+  if (funding != null) {
+    sF = clamp(-funding / 0.0005, -1, 1);
+    const ann = funding * 3 * 365 * 100;
+    factors.push({
+      label: `Funding ${(funding * 100).toFixed(3)}%/8h (≈${ann.toFixed(0)}%/Jahr)`,
+      dir: sF, note: funding > 0 ? "überfüllte Longs" : funding < 0 ? "überfüllte Shorts" : "neutral",
+    });
+  } else factors.push({ label: "Funding nicht verfügbar", dir: 0 });
+
+  let sLS = 0;
+  if (ls != null) {
+    sLS = clamp(-(ls - 1), -1, 1);
+    factors.push({
+      label: `Long/Short-Ratio ${ls.toFixed(2)}`,
+      dir: sLS, note: ls > 1.2 ? "mehr Longs positioniert" : ls < 0.83 ? "mehr Shorts positioniert" : "ausgeglichen",
+    });
+  }
+
+  let raw = 0.3 * s7 + 0.27 * s24 + 0.2 * sF + 0.13 * sLS + 0.1 * s1;
+  if ((c24 ?? 0) > 25 && (funding ?? 0) > 0.0004) {
+    raw -= 0.3;
+    factors.push({ label: "Parabolisch + crowded Longs → Erschöpfungsrisiko", dir: -1 });
+  }
+  const volMcap = m.volume && m.mcap ? m.volume / m.mcap : null;
+  if (volMcap != null)
+    factors.push({ label: `Volumen/MCap ${(volMcap * 100).toFixed(0)}%`, dir: 0, note: volMcap > 0.15 ? "hohe Aktivität" : "ruhig" });
+  if (m.oi != null) factors.push({ label: `Open Interest ${fmtBig(m.oi)} (${m.derivSrc})`, dir: 0 });
+
+  const bias = clamp(raw, -1, 1) * 100;
+  const signal = bias >= 35 ? "LONG" : bias <= -35 ? "SHORT" : "NEUTRAL";
+  let conf = Math.abs(bias);
+  if (funding == null) conf = Math.min(conf, 55);
+  if (volMcap != null && volMcap > 0.15) conf += 8;
+  const confidence = conf >= 60 ? "Hoch" : conf >= 35 ? "Mittel" : "Niedrig";
+  return { bias, signal, confidence, factors };
+}
+
+function scoreSmall(t) {
+  const factors = [];
+  const s24 = clamp((t.h24 ?? 0) / 40, -1, 1);
+  const s6 = clamp((t.h6 ?? 0) / 20, -1, 1);
+  const s1 = clamp((t.h1 ?? 0) / 10, -1, 1);
+  if (t.h24 != null) factors.push({ label: `24h ${fmtPct(t.h24)}`, dir: s24 });
+  if (t.h6 != null) factors.push({ label: `6h ${fmtPct(t.h6)}`, dir: s6 });
+  if (t.h1 != null) factors.push({ label: `1h ${fmtPct(t.h1)}`, dir: s1 });
+  let raw = 0.5 * s24 + 0.3 * s6 + 0.2 * s1;
+
+  const flags = [];
+  if (t.liq != null && t.liq < 50000) flags.push("Niedrige Liquidität");
+  if (t.ageMs && (Date.now() - t.ageMs) / 36e5 < 48) flags.push("Sehr neu");
+  const vl = t.liq ? t.vol24 / t.liq : null;
+  if (vl != null && vl > 3) flags.push("Extremes Vol/Liq");
+  if (t.fdv && t.mcap && t.fdv > t.mcap * 5) flags.push("Hohe FDV/MCap");
+
+  const bias = clamp(raw, 0, 1) * 100;
+  const signal = bias >= 40 ? "LONG" : bias >= 15 ? "BEOBACHTEN" : "FLAU";
+  const conf = bias - flags.length * 18;
+  const confidence = conf >= 55 ? "Hoch" : conf >= 30 ? "Mittel" : "Niedrig";
+  return { bias, signal, confidence, factors, flags, vl };
+}
+
+/* ----------------------------- Fibonacci ----------------------------- */
+// ZigZag: signifikante Wellen (Swings) per Prozent-Umkehr erkennen, jüngste Welle zurückgeben.
+function detectSwing(highs, lows, times, thr) {
+  const n = highs.length;
+  if (n < 3) return null;
+  const pivots = [];
+  let extHigh = highs[0], extHighIdx = 0, extLow = lows[0], extLowIdx = 0;
+  let trend = 0, start = 1;
+  for (let i = 1; i < n; i++) {
+    if (highs[i] > extHigh) { extHigh = highs[i]; extHighIdx = i; }
+    if (lows[i] < extLow) { extLow = lows[i]; extLowIdx = i; }
+    if ((extHigh - lows[i]) / extHigh >= thr) {
+      pivots.push({ price: extHigh, t: times[extHighIdx], type: "H" });
+      trend = -1; extLow = lows[i]; extLowIdx = i; start = i; break;
+    }
+    if ((highs[i] - extLow) / extLow >= thr) {
+      pivots.push({ price: extLow, t: times[extLowIdx], type: "L" });
+      trend = 1; extHigh = highs[i]; extHighIdx = i; start = i; break;
+    }
+  }
+  if (trend === 0) return { low: extLow, high: extHigh, lowT: times[extLowIdx], highT: times[extHighIdx] };
+  let ext = trend === 1 ? extHigh : extLow;
+  let extIdx = trend === 1 ? extHighIdx : extLowIdx;
+  for (let i = start + 1; i < n; i++) {
+    if (trend === 1) {
+      if (highs[i] > ext) { ext = highs[i]; extIdx = i; }
+      else if ((ext - lows[i]) / ext >= thr) { pivots.push({ price: ext, t: times[extIdx], type: "H" }); trend = -1; ext = lows[i]; extIdx = i; }
+    } else {
+      if (lows[i] < ext) { ext = lows[i]; extIdx = i; }
+      else if ((highs[i] - ext) / ext >= thr) { pivots.push({ price: ext, t: times[extIdx], type: "L" }); trend = 1; ext = highs[i]; extIdx = i; }
+    }
+  }
+  pivots.push({ price: ext, t: times[extIdx], type: trend === 1 ? "H" : "L" });
+  if (pivots.length < 2) return { low: extLow, high: extHigh, lowT: times[extLowIdx], highT: times[extHighIdx] };
+  const a = pivots[pivots.length - 2], b = pivots[pivots.length - 1];
+  return {
+    low: Math.min(a.price, b.price), high: Math.max(a.price, b.price),
+    lowT: a.price <= b.price ? a.t : b.t, highT: a.price <= b.price ? b.t : a.t,
+  };
+}
+
+// Retracement der jüngsten Welle + Schwellen (LONG über X, SHORT unter Y, sonst NEUTRAL).
+function computeFib(low, high, lowT, highT, price) {
+  const range = high - low;
+  if (!(range > 0) || price == null) return null;
+  const dir = lowT < highT ? "up" : "down";
+  const retr = dir === "up" ? (high - price) / range : (price - low) / range;
+  const levels = FIB_LEVELS.map((r) => ({ r, price: dir === "up" ? high - r * range : low + r * range }));
+  const b1 = dir === "up" ? high - 0.618 * range : low + 0.786 * range;
+  const b2 = dir === "up" ? high - 0.786 * range : low + 0.618 * range;
+  const longThreshold = Math.max(b1, b2);
+  const shortThreshold = Math.min(b1, b2);
+  const rec = price > longThreshold ? "LONG" : price < shortThreshold ? "SHORT" : "NEUTRAL";
+  return { dir, retr, rec, levels, longThreshold, shortThreshold, swingLow: low, swingHigh: high };
+}
+
+/* ----------------------------- Parser ----------------------------- */
+function parseBybit(json) {
+  const list = json?.result?.list || [];
+  const map = {};
+  for (const it of list) {
+    map[it.symbol] = {
+      funding: it.fundingRate != null ? parseFloat(it.fundingRate) : null,
+      oi: it.openInterestValue != null ? parseFloat(it.openInterestValue) : null,
+    };
+  }
+  return map;
+}
+function parsePhemex(json) {
+  const list = json?.result || json?.data || [];
+  const map = {};
+  for (const it of Array.isArray(list) ? list : []) {
+    const sym = it.symbol;
+    if (!sym || !sym.endsWith("USDT")) continue;
+    let f = it.fundingRateRr ?? it.fundingRate ?? it.predFundingRateRr;
+    f = f != null ? parseFloat(f) : null;
+    if (f != null && Math.abs(f) > 0.05) f = f / 1e8;     // evtl. skaliert (1e8)
+    if (f != null && Math.abs(f) > 0.05) f = null;         // immer noch unplausibel -> verwerfen
+    let oi = it.openInterestRv ?? it.openInterest;
+    oi = oi != null ? parseFloat(oi) : null;
+    map[sym] = { funding: f, oi };
+  }
+  return map;
+}
+
+/* ------------------------------- UI ------------------------------------- */
+function BiasGauge({ bias, signal }) {
+  const pct = clamp((bias + 100) / 2, 0, 100);
+  const col = signal === "LONG" ? C.long : signal === "SHORT" ? C.short : C.neutral;
+  return (
+    <div className="gauge">
+      <div className="gauge-track">
+        <div className="gauge-half left" /><div className="gauge-half right" />
+        <div className="gauge-center" />
+        <div className="gauge-marker" style={{ left: `${pct}%`, background: col, boxShadow: `0 0 10px ${col}` }} />
+      </div>
+      <div className="gauge-labels"><span>SHORT</span><span>NEUTRAL</span><span>LONG</span></div>
+    </div>
+  );
+}
+function SignalBadge({ signal, confidence }) {
+  const map = { LONG: C.long, SHORT: C.short, NEUTRAL: C.neutral, BEOBACHTEN: C.gold, FLAU: C.muted };
+  const col = map[signal] || C.neutral;
+  return (
+    <div className="badge" style={{ color: col, borderColor: col + "66", background: col + "16" }}>
+      <span className="badge-sig">{signal}</span>
+      {confidence && <span className="badge-conf">{confidence}</span>}
+    </div>
+  );
+}
+const StatusDot = ({ ok }) => (
+  <span className="dot" style={{ background: ok ? C.long : C.short, boxShadow: `0 0 6px ${ok ? C.long : C.short}` }} />
+);
+function InfoTip({ text }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className={"infotip" + (open ? " open" : "")}>
+      <button className="infotip-btn" aria-label="Info"
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}>!</button>
+      <span className="infotip-bubble">{text}</span>
+    </span>
+  );
+}
+
+function CryptoSignalDashboard() {
+  const [tab, setTab] = useState("majors");
+  const [majors, setMajors] = useState([]);
+  const [smalls, setSmalls] = useState([]);
+  const [listings, setListings] = useState({ upcoming: [], recent: [] });
+  const [global, setGlobal] = useState(null);
+  const [status, setStatus] = useState({ cg: null, bybit: null, phemex: null, dx: null });
+  const [loading, setLoading] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [sortKey, setSortKey] = useState("bias");
+  const [expanded, setExpanded] = useState(() => new Set());
+  const [auto, setAuto] = useState(true);
+  const timer = useRef(null);
+  const fibCache = useRef({});
+  const fibAt = useRef(0);
+  const auxAt = useRef(0);
+
+  const toggle = (id) =>
+    setExpanded((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const loadMajors = useCallback(async () => {
+    // Märkte mit einem Retry (CoinGecko-Limit kann kurzzeitig blocken)
+    const getMarkets = async () => {
+      for (let a = 0; a < 2; a++) {
+        try { const r = await fetch(CG_MARKETS); if (!r.ok) throw 0; return await r.json(); }
+        catch (e) { if (a === 0) await new Promise((s) => setTimeout(s, 1500)); }
+      }
+      return null;
+    };
+    const [cg, by, ph] = await Promise.allSettled([
+      getMarkets(),
+      fetch(BYBIT_TICKERS).then((r) => { if (!r.ok) throw 0; return r.json(); }),
+      fetch(PHEMEX_TICKERS).then((r) => { if (!r.ok) throw 0; return r.json(); }),
+    ]);
+
+    // Marktüberblick + Wechselkurs nur alle 5 Min laden (schont CoinGeckos Limit)
+    if (Date.now() - auxAt.current > 5 * 60 * 1000) {
+      const [gl, fx] = await Promise.allSettled([
+        fetch(CG_GLOBAL).then((r) => r.json()),
+        fetch(CG_FX).then((r) => r.json()),
+      ]);
+      if (gl.status === "fulfilled" && gl.value?.data) {
+        const d = gl.value.data;
+        setGlobal({
+          mcap: d.total_market_cap?.usd,
+          change: d.market_cap_change_percentage_24h_usd,
+          btcDom: d.market_cap_percentage?.btc,
+          ethDom: d.market_cap_percentage?.eth,
+        });
+      }
+      if (fx.status === "fulfilled" && fx.value?.bitcoin?.usd && fx.value?.bitcoin?.eur) {
+        EURFX = fx.value.bitcoin.eur / fx.value.bitcoin.usd;
+      }
+      if (gl.status === "fulfilled" || fx.status === "fulfilled") auxAt.current = Date.now();
+    }
+
+    const bybitMap = by.status === "fulfilled" ? parseBybit(by.value) : {};
+    const phemexMap = ph.status === "fulfilled" ? parsePhemex(ph.value) : {};
+    const bybitOk = by.status === "fulfilled" && Object.keys(bybitMap).length > 0;
+    const phemexOk = ph.status === "fulfilled" && Object.keys(phemexMap).length > 0;
+
+    if (cg.status !== "fulfilled" || !Array.isArray(cg.value)) {
+      setStatus((s) => ({ ...s, cg: false, bybit: bybitOk, phemex: phemexOk }));
+      return;
+    }
+
+    // Long/Short-Ratio nur für die Top-10 Majors mit Bybit-Perp (sparsam)
+    const lsTargets = cg.value
+      .map((c) => (c.symbol || "").toUpperCase() + "USDT")
+      .filter((s) => bybitMap[s])
+      .slice(0, 10);
+    const lsRes = await Promise.allSettled(
+      lsTargets.map((s) =>
+        fetch(BYBIT_LS(s)).then((r) => r.json()).then((j) => {
+          const row = j?.result?.list?.[0];
+          if (!row) return null;
+          const buy = parseFloat(row.buyRatio), sell = parseFloat(row.sellRatio);
+          return buy && sell ? { s, ratio: buy / sell, buy, sell } : null;
+        })
+      )
+    );
+    const lsMap = {};
+    lsRes.forEach((r) => { if (r.status === "fulfilled" && r.value) lsMap[r.value.s] = r.value; });
+
+    // Fibonacci: Tageskerzen (90T) nur alle 5 Min neu laden (Swings ändern sich kaum minütlich)
+    const fibTargets = cg.value
+      .map((c) => (c.symbol || "").toUpperCase() + "USDT")
+      .filter((s) => bybitMap[s])
+      .slice(0, 30);
+    if (fibTargets.length && (Date.now() - fibAt.current > 5 * 60 * 1000 || Object.keys(fibCache.current).length === 0)) {
+      const fetchKline = (s) =>
+        fetch(BYBIT_KLINE(s)).then((r) => r.json()).then((j) => {
+          const list = j?.result?.list || [];
+          if (list.length < 3) return null;
+          const chron = list.slice().reverse(); // ältester -> neuester
+          const highs = chron.map((c) => +c[2]);
+          const lows = chron.map((c) => +c[3]);
+          const times = chron.map((c) => +c[0]);
+          const sw = detectSwing(highs, lows, times, 0.2); // 20% Umkehr = signifikante Welle
+          return sw ? { s, ...sw } : null;
+        }).catch(() => null);
+      // In Schüben à 5 abfragen, um Bybits Rate-Limit nicht zu reizen
+      for (let i = 0; i < fibTargets.length; i += 5) {
+        const batch = fibTargets.slice(i, i + 5);
+        const res = await Promise.allSettled(batch.map(fetchKline));
+        res.forEach((r) => {
+          if (r.status === "fulfilled" && r.value) {
+            const v = r.value;
+            fibCache.current[v.s] = { low: v.low, high: v.high, lowT: v.lowT, highT: v.highT };
+          }
+        });
+        if (i + 5 < fibTargets.length) await new Promise((res2) => setTimeout(res2, 220));
+      }
+      // Nur als "frisch" markieren, wenn wirklich Daten kamen — sonst nächster Refresh erneut versuchen
+      if (Object.keys(fibCache.current).length > 0) fibAt.current = Date.now();
+    }
+
+    const rows = cg.value.map((c) => {
+      const sym = (c.symbol || "").toUpperCase();
+      const bsym = sym + "USDT";
+      const d = bybitMap[bsym] || phemexMap[bsym] || {};
+      const derivSrc = bybitMap[bsym] ? "Bybit" : phemexMap[bsym] ? "Phemex" : null;
+      const m = {
+        id: c.id, sym, name: c.name, img: c.image, rank: c.market_cap_rank,
+        price: c.current_price, mcap: c.market_cap, volume: c.total_volume,
+        c1: c.price_change_percentage_1h_in_currency,
+        c24: c.price_change_percentage_24h_in_currency ?? c.price_change_percentage_24h,
+        c7: c.price_change_percentage_7d_in_currency,
+        funding: d.funding ?? null, oi: d.oi ?? null, derivSrc,
+        ls: lsMap[bsym]?.ratio ?? null,
+        lsBuy: lsMap[bsym]?.buy ?? null,
+        lsSell: lsMap[bsym]?.sell ?? null,
+      };
+      const fc = fibCache.current[bsym];
+      m.fib = fc ? computeFib(fc.low, fc.high, fc.lowT, fc.highT, c.current_price) : null;
+      return { ...m, ...scoreMajor(m) };
+    });
+    setMajors(rows);
+    setStatus((s) => ({ ...s, cg: true, bybit: bybitOk, phemex: phemexOk }));
+  }, []);
+
+  const loadListings = useCallback(async () => {
+    try {
+      const j = await fetch(BYBIT_INSTR).then((r) => { if (!r.ok) throw 0; return r.json(); });
+      const list = j?.result?.list || [];
+      const now = Date.now();
+      const items = list
+        .filter((it) => it.quoteCoin === "USDT" && it.launchTime && it.launchTime !== "0")
+        .map((it) => ({ symbol: it.symbol, base: it.baseCoin, status: it.status, t: parseInt(it.launchTime, 10) }));
+      const upcoming = items.filter((i) => i.t > now).sort((a, b) => a.t - b.t).slice(0, 25);
+      const recent = items
+        .filter((i) => i.t <= now && now - i.t < 30 * 864e5)
+        .sort((a, b) => b.t - a.t)
+        .slice(0, 25);
+      setListings({ upcoming, recent });
+    } catch (e) { /* Bybit-Dot zeigt den Status */ }
+  }, []);
+
+  const loadSmalls = useCallback(async () => {
+    try {
+      const boosts = await fetch(DEX_BOOSTS).then((r) => { if (!r.ok) throw 0; return r.json(); });
+      const seen = new Set(); const addrs = [];
+      for (const b of boosts || []) {
+        if (b.tokenAddress && !seen.has(b.tokenAddress) && addrs.length < 28) { seen.add(b.tokenAddress); addrs.push(b.tokenAddress); }
+      }
+      if (!addrs.length) { setStatus((s) => ({ ...s, dx: false })); return; }
+      const data = await fetch(DEX_TOKENS + addrs.join(",")).then((r) => { if (!r.ok) throw 0; return r.json(); });
+      const byTok = {};
+      for (const p of data.pairs || []) {
+        const a = p.baseToken?.address; if (!a) continue;
+        const liq = p.liquidity?.usd ?? 0;
+        if (!byTok[a] || liq > (byTok[a].liquidity?.usd ?? 0)) byTok[a] = p;
+      }
+      let rows = Object.values(byTok).map((p) => {
+        const t = {
+          id: p.pairAddress, sym: (p.baseToken?.symbol || "?").toUpperCase(), name: p.baseToken?.name || "",
+          chain: p.chainId, url: p.url, price: parseFloat(p.priceUsd),
+          liq: p.liquidity?.usd ?? null, vol24: p.volume?.h24 ?? null,
+          mcap: p.marketCap ?? null, fdv: p.fdv ?? null, ageMs: p.pairCreatedAt ?? null,
+          h1: p.priceChange?.h1 ?? null, h6: p.priceChange?.h6 ?? null, h24: p.priceChange?.h24 ?? null,
+        };
+        return { ...t, ...scoreSmall(t) };
+      });
+      rows = rows.filter((r) => r.liq && r.liq > 5000).sort((a, b) => b.bias - a.bias).slice(0, 18);
+      setSmalls(rows);
+      setStatus((s) => ({ ...s, dx: true }));
+    } catch (e) { setStatus((s) => ({ ...s, dx: false })); }
+  }, []);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    await Promise.allSettled([loadMajors(), loadListings(), loadSmalls()]);
+    setUpdated(new Date());
+    setLoading(false);
+  }, [loadMajors, loadListings, loadSmalls]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    if (auto) { timer.current = setInterval(refresh, 60000); return () => clearInterval(timer.current); }
+  }, [auto, refresh]);
+
+  const sortedMajors = [...majors].sort((a, b) => {
+    if (sortKey === "bias") return b.bias - a.bias;
+    if (sortKey === "c24") return (b.c24 ?? -999) - (a.c24 ?? -999);
+    if (sortKey === "funding") return (b.funding ?? 0) - (a.funding ?? 0);
+    if (sortKey === "rank") return (a.rank ?? 999) - (b.rank ?? 999);
+    return 0;
+  });
+
+  return (
+    <div className="root">
+      <style>{FONTS + CSS}</style>
+
+      <header className="hdr">
+        <div className="brand">
+          <div className="mark">◧</div>
+          <div><h1>SIGNAL<span>DESK</span></h1><p className="tag">Live Long/Short · Majors · On-Chain · Listings</p></div>
+        </div>
+        <div className="ctrls">
+          <div className="sources">
+            <span><StatusDot ok={status.cg} />CoinGecko</span>
+            <span><StatusDot ok={status.bybit} />Bybit</span>
+            <span><StatusDot ok={status.phemex} />Phemex</span>
+            <span><StatusDot ok={status.dx} />Dexscreener</span>
+          </div>
+          <button className={"auto " + (auto ? "on" : "")} onClick={() => setAuto((a) => !a)}>Auto 60s {auto ? "AN" : "AUS"}</button>
+          <button className="refresh" onClick={refresh} disabled={loading}>{loading ? "lädt…" : "↻ Aktualisieren"}</button>
+        </div>
+      </header>
+
+      {global && (
+        <div className="overview">
+          <div className="ov"><span className="ov-l">Gesamt-Marktkap.</span><span className="ov-v">{fmtBig(global.mcap)}</span>
+            <span className={"ov-c " + (global.change >= 0 ? "up" : "dn")}>{fmtPct(global.change)} 24h</span></div>
+          <div className="ov"><span className="ov-l">BTC-Dominanz</span><span className="ov-v">{global.btcDom != null ? global.btcDom.toFixed(1) + "%" : "—"}</span></div>
+          <div className="ov"><span className="ov-l">ETH-Dominanz</span><span className="ov-v">{global.ethDom != null ? global.ethDom.toFixed(1) + "%" : "—"}</span></div>
+        </div>
+      )}
+
+      <div className="disclaimer">
+        Keine Anlageberatung. Signale sind transparente, algorithmische Heuristiken — keine Kauf-/Verkaufsempfehlungen.
+        Krypto ist hochvolatil; Small-Caps bergen Totalverlust- und Pump-&amp;-Dump-Risiko (siehe RAVE 04/2026).
+      </div>
+
+      <nav className="tabs">
+        <button className={tab === "majors" ? "act" : ""} onClick={() => setTab("majors")}>Majors <em>{majors.length}</em></button>
+        <button className={tab === "onchain" ? "act" : ""} onClick={() => setTab("onchain")}>On-Chain <em>{smalls.length}</em></button>
+        <button className={tab === "new" ? "act" : ""} onClick={() => setTab("new")}>Neu handelbar <em>{listings.upcoming.length + listings.recent.length}</em></button>
+        <span className="upd">{updated ? "Stand " + updated.toLocaleTimeString("de-DE") : ""}</span>
+      </nav>
+
+      {tab === "majors" && (
+        <>
+          <div className="sortbar">Sortieren:
+            {[["bias", "Signal-Stärke"], ["c24", "24h"], ["funding", "Funding"], ["rank", "Market Cap"]].map(([k, l]) => (
+              <button key={k} className={sortKey === k ? "act" : ""} onClick={() => setSortKey(k)}>{l}</button>
+            ))}
+          </div>
+          {status.bybit === false && status.phemex === false && (
+            <div className="warn">Bybit &amp; Phemex nicht erreichbar — Signale laufen ohne Derivate-Daten (Konfidenz gedeckelt).</div>
+          )}
+          {status.cg === false && <div className="warn">CoinGecko nicht erreichbar — keine Major-Daten ladbar.</div>}
+          <div className="grid">
+            {sortedMajors.map((m) => (
+              <article key={m.id} className="card">
+                <div className="row1">
+                  <div className="ident">{m.img && <img src={m.img} alt="" />}
+                    <div><div className="sym">{m.sym}<span className="rnk">#{m.rank}</span></div><div className="nm">{m.name}</div></div>
+                  </div>
+                  <div className="price">{fmtPrice(m.price)}</div>
+                </div>
+                <BiasGauge bias={m.bias} signal={m.signal} />
+                <div className="row2">
+                  <SignalBadge signal={m.signal} confidence={m.confidence} />
+                  <div className="quick">
+                    <span className={m.c24 >= 0 ? "up" : "dn"}>{fmtPct(m.c24)} 24h</span>
+                    <span className={m.c7 >= 0 ? "up" : "dn"}>{fmtPct(m.c7)} 7d</span>
+                    {m.funding != null && <span className={m.funding >= 0 ? "fp" : "fn"}>Fund {(m.funding * 100).toFixed(3)}%</span>}
+                    {m.ls != null && <span className="muted">L/S {m.ls.toFixed(2)}</span>}
+                    {m.fib && <span style={{ color: m.fib.rec === "LONG" ? C.long : m.fib.rec === "SHORT" ? C.short : C.neutral, fontWeight: 600 }}>Fib {m.fib.rec}</span>}
+                  </div>
+                </div>
+                <button className="why" onClick={() => toggle(m.id)}>{expanded.has(m.id) ? "Warum? ▴" : "Warum? ▾"}</button>
+                {expanded.has(m.id) && (
+                  <>
+                    {(m.lsBuy != null || m.funding != null || m.fib) && (
+                      <div className="posbox">
+                        {m.lsBuy != null && (
+                          <div className="posrow">
+                            <div className="poslabel">Long/Short-Positionierung
+                              <InfoTip text="Verhältnis der long zu short positionierten Konten — Positionierung der Marktteilnehmer nach Anzahl der offenen Konten. Stichprobe der Bybit-Trader, nicht des Gesamtmarkts." />
+                            </div>
+                            <div className="lsbar">
+                              <div className="lsbar-long" style={{ width: (m.lsBuy * 100) + "%" }}>{(m.lsBuy * 100).toFixed(0)}% Long</div>
+                              <div className="lsbar-short" style={{ width: (m.lsSell * 100) + "%" }}>{(m.lsSell * 100).toFixed(0)}% Short</div>
+                            </div>
+                            <div className="posmeta">Ratio {m.ls != null ? m.ls.toFixed(2) : "—"}</div>
+                          </div>
+                        )}
+                        {m.funding != null && (
+                          <div className="posrow">
+                            <div className="poslabel">Funding &amp; Kapital
+                              <InfoTip text="Geld-/Druckverteilung: zeigt, welche Seite Kapital aggressiver einsetzt — positiv = Longs zahlen (Long-Druck), negativ = Shorts zahlen (Short-Druck). Open Interest = offene Positionen auf Bybit. Ein echter Long-/Short-Geldsplit existiert nicht, da das Open Interest beidseitig identisch ist." />
+                            </div>
+                            <div className="posmoney">
+                              <span className={m.funding >= 0 ? "fp" : "fn"}>Funding {(m.funding * 100).toFixed(3)}%/8h · ≈{(m.funding * 3 * 365 * 100).toFixed(0)}%/Jahr · {m.funding >= 0 ? "Longs zahlen" : "Shorts zahlen"}</span>
+                              <span className="mut">24h-Handelsvolumen {fmtBig(m.volume)}</span>
+                              <span className="mut">Open Interest {fmtBig(m.oi)}{m.derivSrc ? " (" + m.derivSrc + ")" : ""}</span>
+                            </div>
+                          </div>
+                        )}
+                        {m.fib && (
+                          <div className="posrow">
+                            <div className="poslabel">Fibonacci-Retracement (jüngste Welle)
+                              <InfoTip text="Aus den Wochenkerzen wird per Wellen-Erkennung (signifikante Swings ≥ 20 %) die jüngste relevante Kurswelle bestimmt und darauf das Retracement berechnet. Angezeigt werden die Fibonacci-Marken mit Kurswerten sowie die Schwellen: LONG oberhalb, SHORT unterhalb, dazwischen NEUTRAL. Das sind Kurs-Niveaus, keine Zeitpunkte." />
+                            </div>
+                            <div className="posmoney">
+                              <span style={{ color: m.fib.rec === "LONG" ? C.long : m.fib.rec === "SHORT" ? C.short : C.neutral, fontWeight: 600 }}>Empfehlung: {m.fib.rec} · aktuell {(clamp(m.fib.retr, 0, 1.5) * 100).toFixed(0)} % Retracement</span>
+                              {m.fib.rec === "SHORT" && (<>
+                                <span style={{ color: C.short }}>SHORT bis ~{fmtPrice(m.fib.swingLow)}</span>
+                                <span className="mut">Invalidierung über {fmtPrice(m.fib.shortThreshold)} · ab {fmtPrice(m.fib.longThreshold)} LONG</span>
+                              </>)}
+                              {m.fib.rec === "LONG" && (<>
+                                <span style={{ color: C.long }}>LONG bis ~{fmtPrice(m.fib.swingHigh)}</span>
+                                <span className="mut">Invalidierung unter {fmtPrice(m.fib.longThreshold)} · ab {fmtPrice(m.fib.shortThreshold)} SHORT</span>
+                              </>)}
+                              {m.fib.rec === "NEUTRAL" && (<>
+                                <span style={{ color: C.long }}>ab {fmtPrice(m.fib.longThreshold)} → LONG bis ~{fmtPrice(m.fib.swingHigh)}</span>
+                                <span style={{ color: C.short }}>ab {fmtPrice(m.fib.shortThreshold)} → SHORT bis ~{fmtPrice(m.fib.swingLow)}</span>
+                              </>)}
+                            </div>
+                            <div className="fibladder">
+                              {m.fib.levels.filter((L) => L.r > 0 && L.r < 1).map((L) => (
+                                <span key={L.r} className="fiblvl">{(L.r * 100).toFixed(1).replace(".0", "")}% · {fmtPrice(L.price)}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <ul className="factors">
+                      {m.factors.map((f, i) => (
+                        <li key={i}><span className="fdir" style={{ color: f.dir > 0.05 ? C.long : f.dir < -0.05 ? C.short : C.muted }}>
+                          {f.dir > 0.05 ? "▲" : f.dir < -0.05 ? "▼" : "■"}</span>{f.label}{f.note ? ` — ${f.note}` : ""}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </article>
+            ))}
+          </div>
+        </>
+      )}
+
+      {tab === "onchain" && (
+        <>
+          <div className="note">On-Chain-Momentum aus trending Dexscreener-Token. Nur Long-Seite. Achte auf die ⚠-Flags — genau diese Konstellation kennzeichnete den RAVE-Pump.</div>
+          {status.dx === false && <div className="warn">Dexscreener nicht erreichbar.</div>}
+          <div className="grid">
+            {smalls.map((t) => (
+              <article key={t.id} className="card">
+                <div className="row1">
+                  <div className="ident"><div className="chainchip">{t.chain}</div>
+                    <div><div className="sym">{t.sym}</div><div className="nm">{t.name} · {ageStr(t.ageMs)} alt</div></div>
+                  </div>
+                  <div className="price">{fmtPrice(t.price)}</div>
+                </div>
+                <BiasGauge bias={t.bias} signal={t.signal === "LONG" ? "LONG" : "NEUTRAL"} />
+                <div className="row2">
+                  <SignalBadge signal={t.signal} confidence={t.confidence} />
+                  <div className="quick"><span className={t.h24 >= 0 ? "up" : "dn"}>{fmtPct(t.h24)} 24h</span>
+                    <span className="muted">Liq {fmtBig(t.liq)}</span><span className="muted">Vol {fmtBig(t.vol24)}</span></div>
+                </div>
+                {t.flags.length > 0 && (
+                  <div className="flags">
+                    {t.flags.map((f, i) => <span key={i} className="flag">⚠ {f}</span>)}
+                    <InfoTip text="Warnzeichen für erhöhtes Risiko: 'Niedrige Liquidität' (unter ~$50k, leicht manipulierbar und schwer zu verlassen), 'Sehr neu' (unter 48h, unerprobt), 'Extremes Vol/Liq' (Volumen über 3× der Liquidität, typisch für Pumps), 'Hohe FDV/MCap' (großer Teil der Token noch nicht im Umlauf → Verwässerungsrisiko). Diese Konstellation kennzeichnete den RAVE-Pump." />
+                  </div>
+                )}
+                <button className="why" onClick={() => toggle(t.id)}>{expanded.has(t.id) ? "Details ▴" : "Details ▾"}</button>
+                {expanded.has(t.id) && (
+                  <>
+                    <div className="posbox">
+                      <div className="posrow">
+                        <div className="poslabel">Liquidität &amp; Aktivität
+                          <InfoTip text="Liquidität = wie viel Kapital im Handelspool steckt; niedrig bedeutet leicht manipulierbar und schwer wieder herauszukommen. Vol/Liq = 24h-Volumen geteilt durch Liquidität; sehr hohe Werte deuten auf hektisches Hin- und Herhandeln (mögliche Wash-/Pump-Aktivität). FDV = Bewertung, wenn alle Token im Umlauf wären." />
+                        </div>
+                        <div className="posmoney">
+                          <span className="mut">Liquidität {fmtBig(t.liq)}</span>
+                          <span className="mut">24h-Volumen {fmtBig(t.vol24)}</span>
+                          <span className="mut">Vol/Liq {t.vl != null ? t.vl.toFixed(1) + "×" : "—"}</span>
+                          <span className="mut">Market Cap {fmtBig(t.mcap)} · FDV {fmtBig(t.fdv)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <ul className="factors">
+                      {t.factors.map((f, i) => (
+                        <li key={i}><span className="fdir" style={{ color: f.dir > 0.05 ? C.long : f.dir < -0.05 ? C.short : C.muted }}>
+                          {f.dir > 0.05 ? "▲" : f.dir < -0.05 ? "▼" : "■"}</span>{f.label}</li>
+                      ))}
+                      {t.url && <li><a href={t.url} target="_blank" rel="noreferrer" className="dexlink">Auf Dexscreener öffnen ↗</a></li>}
+                    </ul>
+                  </>
+                )}
+              </article>
+            ))}
+          </div>
+        </>
+      )}
+
+      {tab === "new" && (
+        <>
+          <div className="note">Neue &amp; angekündigte USDT-Perpetuals auf Bybit, sortiert nach Startzeitpunkt. „Bald handelbar" = noch nicht gestartet (Pre-Launch), „Frisch gelistet" = in den letzten 30 Tagen live gegangen.</div>
+          {status.bybit === false && <div className="warn">Bybit nicht erreichbar — Listings nicht ladbar.</div>}
+
+          <h3 className="sec">⏳ Bald handelbar ({listings.upcoming.length})
+            <InfoTip text="Von Bybit angekündigte USDT-Perpetuals, deren Handel noch nicht gestartet ist (Pre-Launch). Der Countdown zeigt, wann der Markt live geht. Es werden ausschließlich Bybit-Listings angezeigt." />
+          </h3>
+          {listings.upcoming.length === 0 ? (
+            <div className="empty">Aktuell keine angekündigten Pre-Launch-Märkte.</div>
+          ) : (
+            <div className="listgrid">
+              {listings.upcoming.map((i) => (
+                <div key={i.symbol} className="lcard up">
+                  <div className="lsym">{i.base}<span className="lpair">{i.symbol}</span></div>
+                  <div className="ltime"><span className="lin">in {fmtIn(i.t)}</span><span className="ldate">{fmtDate(i.t)}</span></div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <h3 className="sec">🟢 Frisch gelistet ({listings.recent.length})
+            <InfoTip text="USDT-Perpetuals, die in den letzten 30 Tagen auf Bybit live gegangen sind. Frische Listings sind häufig besonders volatil. Es werden ausschließlich Bybit-Listings angezeigt." />
+          </h3>
+          <div className="listgrid">
+            {listings.recent.map((i) => (
+              <div key={i.symbol} className="lcard">
+                <div className="lsym">{i.base}<span className="lpair">{i.symbol}</span></div>
+                <div className="ltime"><span className="lago">vor {fmtAgo(i.t)}</span><span className="ldate">{fmtDate(i.t)}</span></div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      <footer className="ftr">
+        Modell: Trend (7d) · Momentum (24h/1h) · Funding &amp; Long/Short-Ratio (contrarian) → gewichteter Bias −100…+100.
+        Funding/OI: Bybit (primär), Phemex (plausibilitätsgeprüft). Listings: Bybit. Markt: CoinGecko.
+      </footer>
+    </div>
+  );
+}
+
+/* -------------------------------- Styles -------------------------------- */
+const CSS = `
+.root{background:${C.ink};min-height:100vh;color:${C.text};font-family:'Space Grotesk',system-ui,sans-serif;padding:18px;box-sizing:border-box;}
+.root *{box-sizing:border-box;}
+.hdr{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;}
+.brand{display:flex;gap:12px;align-items:center;}
+.mark{width:42px;height:42px;border:1.5px solid ${C.gold};color:${C.gold};border-radius:9px;display:grid;place-items:center;font-size:22px;}
+.brand h1{font-size:22px;font-weight:700;letter-spacing:1px;margin:0;line-height:1;}
+.brand h1 span{color:${C.gold};}
+.tag{margin:4px 0 0;color:${C.muted};font-size:12px;}
+.ctrls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+.sources{display:flex;gap:10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:${C.muted};flex-wrap:wrap;}
+.sources span{display:flex;align-items:center;gap:5px;}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
+.auto,.refresh{font-family:'IBM Plex Mono',monospace;font-size:12px;border-radius:7px;padding:8px 12px;cursor:pointer;border:1px solid ${C.line};background:${C.panel};color:${C.text};}
+.auto.on{border-color:${C.long}66;color:${C.long};}
+.refresh{background:${C.gold};color:#1a1304;border-color:${C.gold};font-weight:600;}
+.refresh:disabled{opacity:.6;cursor:wait;}
+.overview{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;}
+.ov{background:${C.panel};border:1px solid ${C.line};border-radius:10px;padding:10px 14px;display:flex;flex-direction:column;gap:2px;flex:1;min-width:130px;}
+.ov-l{font-size:11px;color:${C.muted};}
+.ov-v{font-family:'IBM Plex Mono';font-size:16px;font-weight:600;}
+.ov-c{font-family:'IBM Plex Mono';font-size:11px;}
+.ov-c.up{color:${C.long};}.ov-c.dn{color:${C.short};}
+.disclaimer{margin:14px 0 0;font-size:11.5px;line-height:1.5;color:${C.muted};border-left:2px solid ${C.gold};padding:8px 12px;background:${C.panel2};border-radius:0 8px 8px 0;}
+.tabs{display:flex;gap:8px;align-items:center;margin:16px 0 4px;border-bottom:1px solid ${C.line};flex-wrap:wrap;}
+.tabs button{background:none;border:none;color:${C.muted};font-family:'Space Grotesk';font-size:14px;font-weight:600;padding:10px 4px;margin-right:12px;cursor:pointer;border-bottom:2px solid transparent;}
+.tabs button.act{color:${C.text};border-bottom-color:${C.gold};}
+.tabs button em{font-style:normal;font-family:'IBM Plex Mono';font-size:11px;color:${C.muted};margin-left:5px;}
+.upd{margin-left:auto;font-family:'IBM Plex Mono';font-size:11px;color:${C.muted};}
+.sortbar{display:flex;gap:6px;align-items:center;font-size:12px;color:${C.muted};margin:14px 0;flex-wrap:wrap;font-family:'IBM Plex Mono';}
+.sortbar button{background:${C.panel};border:1px solid ${C.line};color:${C.muted};border-radius:6px;padding:5px 9px;cursor:pointer;font-size:11px;}
+.sortbar button.act{color:${C.gold};border-color:${C.gold}66;}
+.note,.warn,.empty{font-size:12px;line-height:1.5;border-radius:8px;padding:10px 12px;margin:12px 0;}
+.note{color:${C.muted};background:${C.panel2};border:1px solid ${C.line};}
+.warn{color:${C.short};background:${C.short}12;border:1px solid ${C.short}44;}
+.empty{color:${C.muted};background:${C.panel2};border:1px dashed ${C.line};}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-top:8px;}
+.card{background:${C.panel};border:1px solid ${C.line};border-radius:12px;padding:14px;}
+.row1{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.ident{display:flex;gap:10px;align-items:center;min-width:0;}
+.ident img{width:30px;height:30px;border-radius:50%;}
+.chainchip{font-family:'IBM Plex Mono';font-size:9px;text-transform:uppercase;border:1px solid ${C.line};border-radius:5px;padding:4px 6px;color:${C.muted};}
+.sym{font-weight:700;font-size:15px;display:flex;align-items:baseline;gap:6px;}
+.rnk{font-family:'IBM Plex Mono';font-size:10px;color:${C.muted};font-weight:400;}
+.nm{font-size:11px;color:${C.muted};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;}
+.price{font-family:'IBM Plex Mono';font-size:15px;font-weight:600;}
+.gauge{margin:14px 0 8px;}
+.gauge-track{position:relative;height:8px;border-radius:5px;display:flex;}
+.gauge-half{flex:1;height:100%;}
+.gauge-half.left{background:linear-gradient(90deg,${C.short}55,${C.short}11);border-radius:5px 0 0 5px;}
+.gauge-half.right{background:linear-gradient(90deg,${C.long}11,${C.long}55);border-radius:0 5px 5px 0;}
+.gauge-center{position:absolute;left:50%;top:-3px;width:1px;height:14px;background:${C.muted}66;}
+.gauge-marker{position:absolute;top:-3px;width:4px;height:14px;border-radius:3px;transform:translateX(-50%);transition:left .4s ease;}
+.gauge-labels{display:flex;justify-content:space-between;font-family:'IBM Plex Mono';font-size:9px;color:${C.muted};margin-top:5px;letter-spacing:.5px;}
+.row2{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;}
+.badge{display:inline-flex;align-items:center;gap:6px;border:1px solid;border-radius:7px;padding:5px 9px;}
+.badge-sig{font-weight:700;font-size:12px;letter-spacing:1px;}
+.badge-conf{font-family:'IBM Plex Mono';font-size:9px;opacity:.8;border-left:1px solid currentColor;padding-left:6px;}
+.quick{display:flex;gap:10px;font-family:'IBM Plex Mono';font-size:11px;flex-wrap:wrap;justify-content:flex-end;}
+.quick .up{color:${C.long};}.quick .dn{color:${C.short};}.quick .fp{color:${C.short};}.quick .fn{color:${C.long};}.quick .muted{color:${C.muted};}
+.why{margin-top:10px;background:none;border:none;color:${C.muted};font-family:'IBM Plex Mono';font-size:11px;cursor:pointer;padding:0;}
+.factors{list-style:none;margin:8px 0 0;padding:8px 0 0;border-top:1px dashed ${C.line};font-size:12px;line-height:1.7;}
+.factors li{display:flex;gap:7px;}
+.fdir{font-size:9px;line-height:1.7;}
+.flags{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;}
+.posbox{margin:10px 0 0;padding:11px;border:1px solid ${C.line};border-radius:9px;background:${C.panel2};display:flex;flex-direction:column;gap:13px;}
+.posrow{display:flex;flex-direction:column;gap:6px;}
+.poslabel{font-size:11px;font-weight:600;color:${C.text};letter-spacing:.3px;}
+.lsbar{display:flex;height:24px;border-radius:6px;overflow:hidden;font-family:'IBM Plex Mono';font-size:10px;font-weight:600;}
+.lsbar-long{background:${C.long}33;color:${C.long};display:flex;align-items:center;padding-left:8px;border-right:2px solid ${C.ink};white-space:nowrap;min-width:0;overflow:hidden;}
+.lsbar-short{background:${C.short}33;color:${C.short};display:flex;align-items:center;justify-content:flex-end;padding-right:8px;white-space:nowrap;min-width:0;overflow:hidden;}
+.posmoney{display:flex;flex-direction:column;gap:3px;font-family:'IBM Plex Mono';font-size:11px;}
+.posmoney .fp{color:${C.short};}.posmoney .fn{color:${C.long};}.posmoney .mut{color:${C.muted};}
+.poshint{font-size:10.5px;line-height:1.5;color:${C.muted};font-style:italic;}
+.posmeta{font-family:'IBM Plex Mono';font-size:11px;color:${C.muted};}
+.fibladder{display:flex;gap:6px;flex-wrap:wrap;margin-top:3px;}
+.fiblvl{font-family:'IBM Plex Mono';font-size:10px;color:${C.muted};border:1px solid ${C.line};border-radius:5px;padding:3px 6px;}
+.flipbox{display:flex;flex-direction:column;gap:4px;margin-top:2px;font-family:'IBM Plex Mono';font-size:11px;}
+.flip{color:${C.text};}
+.flip em{font-style:normal;color:${C.muted};}
+.flip b{font-weight:700;}
+.infotip{position:relative;display:inline-flex;vertical-align:middle;margin-left:6px;}
+.infotip-btn{width:15px;height:15px;border-radius:50%;border:1px solid ${C.muted};background:transparent;color:${C.muted};font-family:'IBM Plex Mono';font-size:10px;font-weight:700;line-height:1;cursor:pointer;padding:0;display:grid;place-items:center;}
+.infotip-btn:hover{color:${C.gold};border-color:${C.gold};}
+.infotip-bubble{visibility:hidden;opacity:0;position:absolute;bottom:155%;left:0;width:min(250px,72vw);background:${C.ink};border:1px solid ${C.line};border-radius:8px;padding:9px 11px;font-size:10.5px;line-height:1.55;color:${C.text};font-weight:400;z-index:30;box-shadow:0 6px 20px rgba(0,0,0,.55);transition:opacity .15s;pointer-events:none;}
+.infotip:hover .infotip-bubble,.infotip.open .infotip-bubble{visibility:visible;opacity:1;}
+.flag{font-family:'IBM Plex Mono';font-size:10px;color:${C.gold};border:1px solid ${C.gold}44;background:${C.gold}12;border-radius:5px;padding:3px 7px;}
+.dexlink{color:${C.gold};text-decoration:none;}
+.sec{font-size:14px;font-weight:600;margin:18px 0 8px;color:${C.text};}
+.listgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;}
+.lcard{background:${C.panel};border:1px solid ${C.line};border-radius:10px;padding:12px;display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.lcard.up{border-color:${C.gold}55;background:${C.gold}0d;}
+.lsym{font-weight:700;font-size:14px;display:flex;flex-direction:column;}
+.lpair{font-family:'IBM Plex Mono';font-size:10px;color:${C.muted};font-weight:400;}
+.ltime{display:flex;flex-direction:column;align-items:flex-end;font-family:'IBM Plex Mono';font-size:11px;}
+.lin{color:${C.gold};font-weight:600;}
+.lago{color:${C.long};}
+.ldate{color:${C.muted};font-size:10px;}
+.ftr{margin-top:22px;padding-top:14px;border-top:1px solid ${C.line};font-size:11px;color:${C.muted};line-height:1.6;font-family:'IBM Plex Mono';}
+@media (max-width:560px){.hdr{flex-direction:column;}.ctrls{width:100%;}.grid{grid-template-columns:1fr;}}
+`;
+
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(CryptoSignalDashboard));
+</script>
+</body>
+</html>
