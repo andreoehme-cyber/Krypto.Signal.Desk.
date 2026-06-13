@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SignalDesk · Float-Screener</title>
+<style>
+:root{
+  --bg:#13151a; --surface:#1b1e25; --surface2:#22262e; --text:#e7e9ee;
+  --muted:#9aa0a8; --hint:#6f747c; --border:rgba(255,255,255,0.08);
+  --border2:rgba(255,255,255,0.05); --accent:#5b8def;
+  --pos:#3ec07a; --neg:#e35b5a;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  padding:20px 14px;line-height:1.5}
+.wrap{max-width:940px;margin:0 auto}
+.title{font-size:18px;font-weight:600;margin:0}
+.subtitle{font-size:13px;color:var(--muted);margin:2px 0 14px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.chip{font-size:12px;padding:4px 10px;border-radius:999px;border:0.5px solid var(--border);
+  background:var(--surface);color:var(--muted)}
+.chip.on{background:rgba(91,141,239,0.16);color:#9cbcff;border-color:rgba(91,141,239,0.4)}
+.filters{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;padding:12px;
+  background:var(--surface);border:0.5px solid var(--border);border-radius:12px;margin-bottom:10px}
+.f{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.f input,.f select{background:var(--surface2);border:0.5px solid var(--border);color:var(--text);
+  border-radius:7px;padding:5px 8px;font-size:12px}
+.f input{width:60px}
+.f input.search{width:160px}
+.count{font-size:12px;color:var(--hint);margin:0 0 10px}
+.card{border:0.5px solid var(--border);border-radius:12px;background:var(--surface)}
+.scr{width:100%;border-collapse:collapse;font-size:13px}
+.scr th{font-weight:500;color:var(--hint);text-align:right;padding:9px 9px;font-size:11px;
+  border-bottom:0.5px solid var(--border)}
+.scr th:first-child,.scr td.sym{text-align:left}
+.scr td{padding:9px;text-align:right;border-bottom:0.5px solid var(--border2)}
+.row{cursor:pointer}
+.row:hover,.row.open{background:var(--surface2)}
+.sym{font-weight:600;white-space:nowrap}
+.chev{display:inline-block;margin-right:7px;color:var(--muted);transition:transform .15s;font-size:11px}
+.pos{color:var(--pos)} .neg{color:var(--neg)} .mut{color:var(--muted)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%}
+.zhi{background:rgba(227,91,90,0.18);color:#f08f8e;border-radius:4px;padding:1px 6px}
+.zmid{background:rgba(239,159,39,0.18);color:#f0b65f;border-radius:4px;padding:1px 6px}
+.spark{display:inline-block;vertical-align:middle}
+.empty{padding:24px;text-align:center;color:var(--muted);font-size:13px}
+.detail td{padding:0}
+.detailwrap{padding:14px 14px 16px}
+.dhead{font-size:13px;color:var(--text);margin-bottom:8px;font-weight:500}
+.range{color:var(--hint);font-weight:400;font-size:12px}
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:12px;color:var(--muted);margin-top:8px}
+.legend span{display:flex;align-items:center;gap:6px}
+.sw{display:inline-block;width:11px;height:11px;border-radius:3px;opacity:.75}
+.ln{display:inline-block;width:14px;height:3px;border-radius:2px}
+.info{position:relative;display:inline-flex;align-items:center;justify-content:center;
+  width:15px;height:15px;border-radius:50%;background:rgba(239,159,39,0.22);color:#f0b65f;
+  font-size:10px;font-weight:700;cursor:help;vertical-align:middle;margin-left:5px}
+.info:focus{outline:none}
+.tip{visibility:hidden;opacity:0;position:absolute;bottom:155%;left:0;width:230px;
+  background:var(--surface2);color:var(--text);border:0.5px solid var(--border);border-radius:8px;
+  padding:8px 10px;font-size:12px;font-weight:400;line-height:1.45;z-index:30;
+  transition:opacity .12s;box-shadow:0 6px 22px rgba(0,0,0,0.4)}
+.info:hover .tip,.info:focus .tip{visibility:visible;opacity:1}
+@media(max-width:860px){ .c-bs{display:none} }
+@media(max-width:760px){ .c-fund{display:none} }
+@media(max-width:640px){ .c-volz,.c-1m{display:none} }
+@media(max-width:500px){ .c-1w{display:none} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script type="text/babel">
+const {useState} = React;
+
+const SYMBOLS = ['BONK','DOGE','SHIB','PEPE','WIF','FLOKI','BOME','MEW','POPCAT','TURBO',
+'MOG','PNUT','NEIRO','GOAT','SPX','BRETT','GIGA','FARTCOIN','SLERF','WEN','MICHI','MYRO',
+'BODEN','TOSHI','DEGEN','BABYDOGE','ELON','KISHU','SAMO','HOSKY','LADYS','WOJAK','AKITA',
+'CHEEMS','SUNDOG','PONKE','MUMU','ANALOS','RETARDIO','BILLY','MOODENG','CHILLGUY','ACT',
+'LUCE','FWOG','APU','NPC','TYBG','KEYCAT','NORMIE','SKI','LANDWOLF','ANDY','BOBO','HOPPY',
+'PEPECOIN','MAGA','TREMP','AIDOGE','SNEK','DADDY','BAN','USA','GME','MANEKI','SIGMA','HARAMBE',
+'SImpson','POPO','SC','WAGMI'];
+
+const PLIST = ['rave','rising','fade','accum','stable','flat'];
+
+function hash(s){ let h=2166136261>>>0; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619)>>>0; } return h>>>0; }
+
+function priceFor(h){
+  const b=h%4; const m=(((h>>>4)%900)+100)/100;
+  if(b===0) return '$'+m.toFixed(2);
+  if(b===1) return '$'+(m/10).toFixed(3);
+  if(b===2) return '$'+(m/1000).toFixed(5);
+  return '$'+(m/100000).toFixed(7);
+}
+
+function seriesFor(seed,len){
+  let s=seed>>>0; const out=[]; let v=50;
+  for(let i=0;i<len;i++){ s=(Math.imul(s,1664525)+1013904223)>>>0; const r=s/4294967296;
+    v=Math.max(6,Math.min(94, v+(r-0.5)*16)); out.push(Math.round(v*10)/10); }
+  return out;
+}
+
+function build(sym){
+  const h=hash(sym);
+  const d1h=Math.round((((h%600)/10)-20)*10)/10;
+  const volZ=Math.round((((h>>>3)%90)/10)*10)/10;
+  const bs=Math.round((0.5+(((h>>>5)%26)/10))*10)/10;
+  const float=40+((h>>>7)%61);
+  const funding=Math.round(((((h>>>9)%30)-10)/100)*100)/100;
+  const flag=(volZ>=5&&float<=80)?'red':(volZ>=3?'amber':'green');
+  const profile=PLIST[h%6];
+  return {sym,price:priceFor(h),d1h,volZ,bs,float,funding,flag,profile,
+    d1:seriesFor(h^17,12), w1:seriesFor(h^131,12), m1:seriesFor(h^977,12)};
+}
+const COINS = SYMBOLS.map(build);
+
+const PROFILES = {
+  rave:   {circ:[24,24,24,25,25,27,30,34,40,55,72,78,80,80], price:[0.30,0.30,0.30,0.30,0.40,1.2,4,9,18,27,14,3,1,0.6], marker:4},
+  rising: {circ:[68,68,69,70,70,71,72,73,74,75,76,77,78,78], price:[0.5,0.5,0.6,0.7,0.9,1.1,1.4,1.6,1.7,1.9,2.0,2.1,2.0,2.14], marker:3},
+  fade:   {circ:[40,42,45,50,58,66,70,72,74,75,76,77,78,79], price:[0.2,0.5,1.2,2.0,2.6,2.2,1.8,1.5,1.3,1.1,1.0,0.9,0.85,0.8], marker:2},
+  accum:  {circ:[60,59,57,55,52,50,48,46,44,43,42,41,40,40], price:[1.0,1.0,1.01,0.99,1.0,1.02,1.01,1.03,1.02,1.04,1.05,1.06,1.07,1.08], marker:-1},
+  stable: {circ:[95,95,96,96,95,96,97,96,97,96,97,97,96,97], price:[1.0,1.02,0.99,1.01,1.03,1.0,0.98,1.02,1.0,1.01,0.99,1.0,1.01,1.0], marker:-1},
+  flat:   {circ:[100,100,100,100,100,100,100,100,100,100,100,100,100,100], price:[0.40,0.41,0.40,0.41,0.41,0.40,0.41,0.42,0.41,0.41,0.40,0.41,0.41,0.41], marker:-1},
+};
+
+const DATES = (function(){ const t=new Date(); const arr=[]; for(let i=13;i>=0;i--){ const d=new Date(t); d.setDate(t.getDate()-i); arr.push(d);} return arr; })();
+const fmtDate = d => ("0"+d.getDate()).slice(-2)+"."+("0"+(d.getMonth()+1)).slice(-2)+".";
+const fmt = v => v>=1 ? v.toFixed(2) : Number(v.toPrecision(2)).toString();
+
+function Sparkline({data}){
+  const n=data.length, W=58, H=22, p=2;
+  const min=Math.min.apply(null,data), max=Math.max.apply(null,data), sp=(max-min)||1;
+  const x=i=>p+i*((W-2*p)/(n-1));
+  const y=v=>H-p-((v-min)/sp)*(H-2*p);
+  const pts=data.map((v,i)=>x(i)+","+y(v)).join(" ");
+  const up=data[n-1]>=data[0];
+  return <svg className="spark" width={W} height={H} viewBox={"0 0 "+W+" "+H}><polyline points={pts} fill="none" stroke={up?"#3ec07a":"#e35b5a"} strokeWidth="1.4"/></svg>;
+}
+
+function FloatChart({circ, price, marker}){
+  const n=circ.length, W=680, H=290, padL=46, padR=46, padT=18, padB=50;
+  const plotL=padL, plotR=W-padR, plotTop=padT, plotBottom=H-padB;
+  const plotW=plotR-plotL, plotH=plotBottom-plotTop;
+  const x=i=>plotL+i*(plotW/(n-1));
+  const yP=p=>plotBottom-(p/100)*plotH;
+  const pmin=Math.min.apply(null,price), pmax=Math.max.apply(null,price), span=(pmax-pmin)||1;
+  const yPr=v=>plotBottom-((v-pmin)/span)*plotH;
+  const green=x(0)+","+plotBottom+" "+circ.map((c,i)=>x(i)+","+yP(c)).join(" ")+" "+x(n-1)+","+plotBottom;
+  const orange=circ.map((c,i)=>x(i)+","+yP(c)).join(" ")+" "+x(n-1)+","+yP(100)+" "+x(0)+","+yP(100);
+  const pl=price.map((v,i)=>x(i)+","+yPr(v)).join(" ");
+  const txt="#9aa0a8", xticks=[0,3,7,10,13].filter(i=>i<n);
+  return (
+    <svg viewBox={"0 0 "+W+" "+H} width="100%" style={{display:"block"}}>
+      {[0,25,50,75,100].map(p=>(<line key={p} x1={plotL} x2={plotR} y1={yP(p)} y2={yP(p)} stroke="#ffffff" strokeOpacity="0.06"/>))}
+      <polygon points={green} fill="#1D9E75" fillOpacity="0.32"/>
+      <polygon points={orange} fill="#EF9F27" fillOpacity="0.30"/>
+      {marker>=0 ? <line x1={x(marker)} x2={x(marker)} y1={plotTop} y2={plotBottom} stroke="#9aa0a8" strokeWidth="1" strokeDasharray="4 4"/> : null}
+      {marker>=0 ? <text x={x(marker)} y={plotTop-5} textAnchor="middle" fontSize="11" fill={txt}>Insider → Börse ({fmtDate(DATES[marker])})</text> : null}
+      <polyline points={pl} fill="none" stroke="#8B82F0" strokeWidth="2"/>
+      <line x1={plotL} x2={plotL} y1={plotTop} y2={plotBottom} stroke="#ffffff" strokeOpacity="0.12"/>
+      <line x1={plotL} x2={plotR} y1={plotBottom} y2={plotBottom} stroke="#ffffff" strokeOpacity="0.12"/>
+      {[0,25,50,75,100].map(p=>(<text key={"l"+p} x={plotL-6} y={yP(p)+3} textAnchor="end" fontSize="11" fill={txt}>{p}%</text>))}
+      {xticks.map(i=>(<text key={"x"+i} x={x(i)} y={plotBottom+17} textAnchor="middle" fontSize="11" fill={txt}>{fmtDate(DATES[i])}</text>))}
+      <text x={plotR+6} y={plotTop+4} textAnchor="start" fontSize="11" fill={txt}>${fmt(pmax)}</text>
+      <text x={plotR+6} y={plotBottom+3} textAnchor="start" fontSize="11" fill={txt}>${fmt(pmin)}</text>
+    </svg>
+  );
+}
+
+function Info({text}){ return <span className="info" tabIndex={0} role="img" aria-label="Hinweis">!<span className="tip">{text}</span></span>; }
+function Flag({c}){ const col=c==="red"?"#e35b5a":c==="amber"?"#EF9F27":"#3ec07a"; return <span className="dot" style={{background:col}}/>; }
+function zClass(v){ return v>=5?"zhi":v>=3?"zmid":""; }
+
+function App(){
+  const [open,setOpen]=useState(null);
+  const [q,setQ]=useState("");
+  const [dMin,setDMin]=useState("");
+  const [zMin,setZMin]=useState("");
+  const [bsMin,setBsMin]=useState("");
+  const [floatMax,setFloatMax]=useState("");
+  const [fundMin,setFundMin]=useState("");
+  const [flag,setFlag]=useState("all");
+  const [sortKey,setSortKey]=useState("d1h");
+
+  const num=v=>{ if(v==="") return null; const n=parseFloat(String(v).replace(",",".")); return isNaN(n)?null:n; };
+  let rows=COINS.filter(c=>{
+    if(q && c.sym.toLowerCase().indexOf(q.toLowerCase().trim())===-1) return false;
+    const dm=num(dMin); if(dm!==null && c.d1h<dm) return false;
+    const zm=num(zMin); if(zm!==null && c.volZ<zm) return false;
+    const bm=num(bsMin); if(bm!==null && c.bs<bm) return false;
+    const fx=num(floatMax); if(fx!==null && c.float>fx) return false;
+    const fn=num(fundMin); if(fn!==null && c.funding<fn) return false;
+    if(flag!=="all" && c.flag!==flag) return false;
+    return true;
+  });
+  const dir = sortKey==="float" ? 1 : -1;
+  rows=rows.slice().sort((a,b)=>dir*(a[sortKey]-b[sortKey]));
+
+  return (
+    <div className="wrap">
+      <p className="title">SignalDesk · Float-Screener</p>
+      <p className="subtitle">handelbares Universum · Klick auf eine Zeile öffnet den Float-Verlauf</p>
+      <div className="chips">
+        {["Bitpanda","Phemex","Binance","Crypto.com"].map(p=>(<span key={p} className="chip on">{p}</span>))}
+      </div>
+      <div className="filters">
+        <span className="f"><input className="search" placeholder="Suche Coin…" value={q} onChange={e=>setQ(e.target.value)}/></span>
+        <span className="f">Δ1h ≥<input type="number" step="0.1" value={dMin} onChange={e=>setDMin(e.target.value)}/></span>
+        <span className="f">Vol-Z ≥<input type="number" step="0.1" value={zMin} onChange={e=>setZMin(e.target.value)}/></span>
+        <span className="f">B/S ≥<input type="number" step="0.1" value={bsMin} onChange={e=>setBsMin(e.target.value)}/></span>
+        <span className="f">Float ≤<input type="number" step="1" value={floatMax} onChange={e=>setFloatMax(e.target.value)}/></span>
+        <span className="f">Funding ≥<input type="number" step="0.01" value={fundMin} onChange={e=>setFundMin(e.target.value)}/></span>
+        <span className="f">Flag
+          <select value={flag} onChange={e=>setFlag(e.target.value)}>
+            <option value="all">alle</option><option value="red">rot</option><option value="amber">gelb</option><option value="green">grün</option>
+          </select>
+        </span>
+        <span className="f">Sortieren
+          <select value={sortKey} onChange={e=>setSortKey(e.target.value)}>
+            <option value="d1h">Δ 1h</option><option value="volZ">Vol-Z</option><option value="bs">B/S</option>
+            <option value="funding">Funding</option><option value="float">Float (niedrig)</option>
+          </select>
+        </span>
+      </div>
+      <p className="count">{rows.length} von {COINS.length} Coins</p>
+      <div className="card">
+        <table className="scr">
+          <thead><tr>
+            <th>Coin</th><th>Preis</th>
+            <th className="c-volz">Vol-Z</th><th className="c-bs">B/S</th>
+            <th>Float</th><th className="c-fund">Funding</th><th>Flag</th>
+            <th>Δ 1h</th><th className="c-spark">1 T</th><th className="c-spark c-1w">1 W</th><th className="c-spark c-1m">1 M</th>
+          </tr></thead>
+          <tbody>
+            {rows.length===0 ? <tr><td className="empty" colSpan={11}>Keine Coins passen zu den Filtern.</td></tr> : rows.map(co=>{
+              const isOpen=open===co.sym; const pr=PROFILES[co.profile];
+              return (
+                <React.Fragment key={co.sym}>
+                  <tr className={"row"+(isOpen?" open":"")} onClick={()=>setOpen(isOpen?null:co.sym)}>
+                    <td className="sym"><span className="chev" style={{transform:isOpen?"rotate(90deg)":"none"}}>▸</span>{co.sym}</td>
+                    <td>{co.price}</td>
+                    <td className="c-volz">{zClass(co.volZ)?<span className={zClass(co.volZ)}>{co.volZ.toFixed(1)}</span>:co.volZ.toFixed(1)}</td>
+                    <td className="c-bs">{co.bs.toFixed(1)}</td>
+                    <td>{co.float}%</td>
+                    <td className={"c-fund "+(co.funding>0?"pos":co.funding<0?"neg":"mut")}>{(co.funding>0?"+":"")+co.funding.toFixed(2)}%</td>
+                    <td><Flag c={co.flag}/></td>
+                    <td className={co.d1h>=0?"pos":"neg"}>{(co.d1h>=0?"+":"")+co.d1h.toFixed(1)}%</td>
+                    <td className="c-spark"><Sparkline data={co.d1}/></td>
+                    <td className="c-spark c-1w"><Sparkline data={co.w1}/></td>
+                    <td className="c-spark c-1m"><Sparkline data={co.m1}/></td>
+                  </tr>
+                  {isOpen ? (
+                    <tr className="detail"><td colSpan={11}>
+                      <div className="detailwrap">
+                        <div className="dhead">
+                          Float-Verlauf · {co.sym} <span className="range">({fmtDate(DATES[0])} – {fmtDate(DATES[DATES.length-1])})</span>
+                          <Info text={'Keyless-Näherung: Umlauf gegen Gesamtangebot. Das rote „auf Börse“-Band lässt sich später per bezahlter API einstecken!'}/>
+                        </div>
+                        <FloatChart circ={pr.circ} price={pr.price} marker={pr.marker}/>
+                        <div className="legend">
+                          <span><i className="sw" style={{background:"#1D9E75"}}/>Im Umlauf</span>
+                          <span><i className="sw" style={{background:"#EF9F27"}}/>Überhang (bereit)
+                            <Info text={'Überhang = gesperrte oder bei Insidern liegende Coins. Niedriger Float = latentes Dump-Risiko!'}/>
+                          </span>
+                          <span><i className="ln" style={{background:"#8B82F0"}}/>Preis</span>
+                        </div>
+                      </div>
+                    </td></tr>
+                  ) : null}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
