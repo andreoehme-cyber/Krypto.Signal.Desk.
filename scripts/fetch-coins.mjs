@@ -1,7 +1,7 @@
 // scripts/fetch-coins.mjs
 // Keyless data layer for SignalDesk. Pulls CoinGecko market data (no API key)
-// and writes data/coins.json. Volume Z-Score and Float-Momentum are derived from
-// small JSON history files in /data and fill in after a few scheduled runs.
+// and writes data/coins.json. Volume Z-Score and Float-Momentum (6h/12h/24h) are
+// derived from small JSON history files in /data and fill in over the first ~24h.
 // Node 20+ (uses global fetch).
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -12,16 +12,13 @@ if (!existsSync(DATA)) mkdirSync(DATA, { recursive: true });
 const OUT      = `${DATA}/coins.json`;
 const VOL_HIST = `${DATA}/history-volume.json`;
 const SUP_HIST = `${DATA}/history-supply.json`;
-const KEEP   = 48;
+const KEEP   = 48;   // 48 snapshots @30min = ~24h of history
 const MIN_Z  = 6;
 
 // ---- WIE VIELE COINS? -------------------------------------------------------
-// Alle Coins nach Marktkapitalisierung, 250 pro Seite.
-//   10 = Top 2500 (deckt praktisch alles Handelbare ab)
+// Alle Coins nach Marktkapitalisierung, 250 pro Seite. 10 = Top 2500.
 const PAGES = 10;
-
-// Einzelne Coins, die zusaetzlich garantiert dabei sein sollen.
-// ID = letzter Teil der CoinGecko-URL: coingecko.com/en/coins/ravedao -> 'ravedao'
+// Einzelne Coins zusaetzlich (ID = letzter Teil der CoinGecko-URL):
 const EXTRA_IDS = ['ravedao'];
 // -----------------------------------------------------------------------------
 
@@ -82,26 +79,33 @@ async function main() {
     const total = c.total_supply || c.max_supply;
     const float = (total && circ) ? Math.round((circ / total) * 100) : 100;
 
+    // Volume Z-Score from history
     const vh = (volHist[id] || []).slice(-KEEP);
     let volZ = null;
     if (vh.length >= MIN_Z) { const s = std(vh) || 1; volZ = Math.round(((c.total_volume - mean(vh)) / s) * 10) / 10; }
     volHist[id] = vh.concat([c.total_volume]).slice(-KEEP);
 
+    // Float-Momentum over 6h / 12h / 24h (snapshots are ~30 min apart)
     const sh = (supHist[id] || []).slice(-KEEP);
-    let fmom = null;
-    const prev = sh[sh.length - 1];
-    if (prev > 0 && circ) fmom = Math.round(((circ - prev) / prev) * 1000) / 10;
+    const momAt = (N) => {
+      if (sh.length < N) return null;
+      const past = sh[sh.length - N];
+      return (past > 0 && circ) ? Math.round(((circ - past) / past) * 1000) / 10 : null;
+    };
+    const fmom6 = momAt(12), fmom12 = momAt(24), fmom24 = momAt(48);
     supHist[id] = sh.concat([circ || 0]).slice(-KEEP);
 
     const flag = (volZ != null && volZ >= 5 && float <= 80) ? 'red'
-      : ((volZ != null && volZ >= 3) || (fmom != null && fmom >= 3)) ? 'amber' : 'green';
+      : ((volZ != null && volZ >= 3) || (fmom6 != null && fmom6 >= 3)) ? 'amber' : 'green';
 
     return {
+      id,
       sym: (c.symbol || '').toUpperCase(),
       priceStr: priceStr(c.current_price), priceNum: c.current_price,
       liq: null,
       mcap: c.market_cap, fdv: c.fully_diluted_valuation, float,
-      volZ, bs: null, funding: null, fmom, flag,
+      volZ, bs: null, funding: null,
+      fmom6, fmom12, fmom24, flag,
       d1h:   round1(c.price_change_percentage_1h_in_currency),
       d1pct: round1(c.price_change_percentage_24h_in_currency),
       w1pct: round1(c.price_change_percentage_7d_in_currency),
