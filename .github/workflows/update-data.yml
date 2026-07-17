@@ -2,8 +2,8 @@ name: update-data
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
-  workflow_dispatch:
+    - cron: '13,43 * * * *'   # alle 30 Min, aber auf krummen Minuten (weicht dem :00/:30-Ansturm aus)
+  workflow_dispatch:           # plus a manual "Run workflow" button
 
 permissions:
   contents: write
@@ -19,6 +19,9 @@ jobs:
           node-version: '20'
 
       - name: Fetch keyless data
+        env:
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node scripts/fetch-coins.mjs
 
       - name: Commit data
