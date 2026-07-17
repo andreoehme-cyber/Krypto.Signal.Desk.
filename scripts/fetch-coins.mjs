@@ -18,6 +18,7 @@ const VOL_HIST = `${DATA}/history-volume.json`;   // { key: [volume, ...] }
 const SUP_HIST = `${DATA}/history-supply.json`;   // { key: [[t, circ], ...] }
 const LIQ_HIST = `${DATA}/history-liquidity.json`;// { key: [[t, liqUsd], ...] }
 const ALERTS   = `${DATA}/alerts-sent.json`;      // { "type:sym": ts }
+const CMAP     = `${DATA}/contract-map.json`;     // Cache: { id: [{chain, addr}] } (Referenzdaten)
 
 const KEEP     = 48;
 const MIN_Z    = 6;
@@ -99,10 +100,20 @@ async function collectMarkets() {
   return uniq;
 }
 
-// ---- 2) CoinGecko Contract-Adressen (ein Aufruf) ----------------------------
+// ---- 2) CoinGecko Contract-Adressen (ein Aufruf, mit Referenz-Cache) --------
 async function contractMap() {
   await sleep(8000);   // CoinGecko nach den Markt-Seiten abkühlen lassen
-  const list = await getJson(`${CG}/coins/list?include_platform=true`);
+  let list;
+  try {
+    list = await getJson(`${CG}/coins/list?include_platform=true`);
+  } catch (e) {
+    const cached = load(CMAP);
+    if (cached && Object.keys(cached).length) {
+      console.error('coins/list fehlgeschlagen (' + e.message + ') — nutze gespeicherte Contract-Map (' + Object.keys(cached).length + ' Einträge)');
+      return cached;
+    }
+    throw e;   // kein Cache vorhanden -> echter Abbruch
+  }
   console.log('Contract-Map: ' + (Array.isArray(list) ? list.length : 0) + ' Einträge von CoinGecko');
   const m = {};
   for (const c of list) {
@@ -113,6 +124,7 @@ async function contractMap() {
     }
     if (entries.length) m[c.id] = entries;
   }
+  writeFileSync(CMAP, JSON.stringify(m));   // frische Referenz sichern (nur Adress-Zuordnung, keine Marktdaten)
   return m;
 }
 
