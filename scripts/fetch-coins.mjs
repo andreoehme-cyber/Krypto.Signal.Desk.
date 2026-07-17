@@ -22,7 +22,7 @@ const ALERTS   = `${DATA}/alerts-sent.json`;      // { "type:sym": ts }
 const KEEP     = 48;
 const MIN_Z    = 6;
 const COOLDOWN = 12 * 3600000;
-const MARKET_PAGES = 8;            // top ~2000 nach MCap (nur Contract-Coins bleiben)
+const MARKET_PAGES = 5;            // top ~1250 nach MCap (nur Contract-Coins bleiben)
 const FRESH_MAX    = 60;           // wie viele frische Dexscreener-Token max.
 const EXTRA_IDS = ['ravedao'];
 
@@ -62,7 +62,7 @@ function abbrN(n) {
   return '$' + n.toFixed(0);
 }
 
-async function getJson(url, tries = 3) {
+async function getJson(url, tries = 5) {
   for (let i = 0; i < tries; i++) {
     try {
       const res = await fetch(url, { headers: { accept: 'application/json' } });
@@ -71,7 +71,7 @@ async function getJson(url, tries = 3) {
       return await res.json();
     } catch (e) {
       if (i === tries - 1) throw e;
-      await sleep(e.message === '429' ? 8000 : 2000);
+      await sleep(e.message === '429' ? 12000 : 3000);
     }
   }
 }
@@ -101,7 +101,9 @@ async function collectMarkets() {
 
 // ---- 2) CoinGecko Contract-Adressen (ein Aufruf) ----------------------------
 async function contractMap() {
+  await sleep(8000);   // CoinGecko nach den Markt-Seiten abkühlen lassen
   const list = await getJson(`${CG}/coins/list?include_platform=true`);
+  console.log('Contract-Map: ' + (Array.isArray(list) ? list.length : 0) + ' Einträge von CoinGecko');
   const m = {};
   for (const c of list) {
     const plats = c.platforms || {};
@@ -206,6 +208,7 @@ function leverageOn(coin, levSets) {
 
 async function main() {
   const markets = await collectMarkets();
+  console.log('Marktdaten: ' + markets.length + ' Coins von CoinGecko');
   const cmap    = await contractMap();
   await sleep(2000);
 
@@ -231,7 +234,9 @@ async function main() {
     addrList.push({ key, chain: f.chain, addr: f.addr });
   }
 
+  console.log('Contract-Coins: ' + Object.keys(cgByKey).length + ', frische Token: ' + Object.keys(freshByKey).length + ' — hole DEX-Pools…');
   const pairs = await dexEnrich(addrList);
+  console.log('Dexscreener: ' + Object.keys(pairs).length + ' Pools gefunden');
 
   const volHist = load(VOL_HIST);
   const supHist = load(SUP_HIST);
