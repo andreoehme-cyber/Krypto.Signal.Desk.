@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SignalDesk · Float-Screener</title>
+<style>
+:root{--bg:#13151a;--surface:#1b1e25;--surface2:#22262e;--text:#e7e9ee;--muted:#9aa0a8;
+--hint:#6f747c;--border:rgba(255,255,255,0.08);--border2:rgba(255,255,255,0.05);--pos:#3ec07a;--neg:#e35b5a;--accent:#5b8def;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:20px 14px;line-height:1.5}
+.wrap{max-width:1280px;margin:0 auto}
+.title{font-size:18px;font-weight:600;margin:0}
+.subtitle{font-size:13px;color:var(--muted);margin:2px 0 14px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.chip{font-size:12px;padding:4px 10px;border-radius:999px;border:0.5px solid var(--border);background:var(--surface);color:var(--muted)}
+.chip.on{background:rgba(91,141,239,0.16);color:#9cbcff;border-color:rgba(91,141,239,0.4)}
+.chip.tog{cursor:pointer}
+.chip.tog.on{background:rgba(62,192,122,0.18);color:#9fe3bd;border-color:rgba(62,192,122,0.45)}
+.searchbar{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.searchbar input{background:var(--surface2);border:0.5px solid var(--border);color:var(--text);border-radius:8px;padding:7px 11px;font-size:13px;width:240px;max-width:60vw}
+.count{font-size:12px;color:var(--hint);margin:0 0 10px}
+.card{border:0.5px solid var(--border);border-radius:12px;background:var(--surface);overflow-x:auto}
+.scr{width:100%;min-width:1330px;border-collapse:collapse;font-size:13px}
+.scr th{font-weight:500;color:var(--hint);text-align:right;padding:9px 8px;font-size:11px;border-bottom:0.5px solid var(--border);user-select:none}
+.scr thead tr:first-child th{cursor:pointer}
+.scr thead tr:first-child th:hover{color:var(--text)}
+.scr th:first-child,.scr td.sym{text-align:left}
+.filt th{padding:4px 6px 8px;border-bottom:0.5px solid var(--border);cursor:default}
+.fin{width:50px;background:var(--surface2);border:0.5px solid var(--border);color:var(--text);border-radius:6px;padding:3px 5px;font-size:11px;text-align:right}
+.fin:disabled{opacity:.35;cursor:not-allowed}
+.fin.sel{width:auto;text-align:left;padding:3px 6px}
+.scr td{padding:9px 8px;text-align:right;border-bottom:0.5px solid var(--border2);white-space:nowrap}
+.row{cursor:pointer}
+.row:hover,.row.open{background:var(--surface2)}
+.sym{font-weight:600}
+.chev{display:inline-block;margin-right:7px;color:var(--muted);transition:transform .15s;font-size:11px}
+.pos{color:var(--pos)} .neg{color:var(--neg)} .mut{color:var(--muted)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%}
+.zhi{background:rgba(227,91,90,0.18);color:#f08f8e;border-radius:4px;padding:1px 6px}
+.zmid{background:rgba(239,159,39,0.18);color:#f0b65f;border-radius:4px;padding:1px 6px}
+.empty{padding:26px 20px;text-align:center;color:var(--muted);font-size:13px;line-height:1.6}
+.empty code{background:var(--surface2);padding:1px 6px;border-radius:5px;font-size:12px}
+.detail td{padding:0}
+.detailwrap{padding:14px 14px 16px}.sub{font-size:13px;color:var(--text);font-weight:500;margin:16px 0 4px}
+.cap{font-size:12px;color:var(--hint);margin:4px 0 2px}
+.note{font-size:12px;color:var(--muted);padding:10px 2px}
+.exwrap{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.ex{font-size:11px;padding:3px 8px;border-radius:999px;border:0.5px solid var(--border);background:var(--surface2);color:var(--muted)}
+.ex.on{background:rgba(91,141,239,0.16);color:#9cbcff;border-color:rgba(91,141,239,0.4)}
+.info{position:relative;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:rgba(239,159,39,0.22);color:#f0b65f;font-size:10px;font-weight:700;cursor:help;vertical-align:middle;margin-left:5px}
+.info:focus{outline:none}
+.tip{visibility:hidden;opacity:0;position:absolute;top:150%;left:0;width:230px;background:var(--surface2);color:var(--text);border:0.5px solid var(--border);border-radius:8px;padding:8px 10px;font-size:12px;font-weight:400;line-height:1.45;text-align:left;z-index:40;transition:opacity .12s;box-shadow:0 6px 22px rgba(0,0,0,0.45)}
+.tip.r{left:auto;right:0}
+.info:hover .tip,.info:focus .tip{visibility:visible;opacity:1}
+.chainbadge{font-size:11px;padding:2px 6px;border-radius:6px;background:var(--surface2);color:var(--muted);border:0.5px solid var(--border);text-transform:capitalize}
+.dexonly{font-size:9px;font-weight:700;margin-left:5px;padding:1px 5px;border-radius:6px;background:rgba(239,159,39,0.18);color:#f0b65f}
+.scam{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.sc{font-size:11px;padding:3px 9px;border-radius:999px;border:0.5px solid var(--border);background:var(--surface2)}
+.sc.g{background:rgba(52,199,120,0.14);color:#7ee2a8;border-color:rgba(52,199,120,0.35)}
+.sc.a{background:rgba(239,159,39,0.16);color:#f0b65f;border-color:rgba(239,159,39,0.4)}
+.sc.r{background:rgba(240,90,90,0.16);color:#ff9b9b;border-color:rgba(240,90,90,0.45)}
+.spark{margin-top:6px}
+.evalpanel{margin:10px 0;padding:10px 12px;border:0.5px solid var(--border);border-radius:10px;background:var(--surface2)}
+.evhead{font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px}
+.evrow{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline;margin:3px 0;font-size:11.5px;color:var(--muted)}
+.evrow b{color:var(--text);min-width:150px;display:inline-block}
+.evcell{white-space:nowrap}
+.evtog{margin-top:6px;font-size:11px;color:var(--accent);cursor:pointer;user-select:none}
+.evbreak{margin-top:6px;border-top:0.5px solid var(--border);padding-top:6px}
+.evbrsec{margin-bottom:6px}
+.evbrhead{font-size:11px;font-weight:700;color:var(--text);margin-bottom:2px}
+.evrow2{display:flex;flex-wrap:wrap;gap:4px 12px;margin:1px 0 3px;font-size:11px;color:var(--muted)}
+.evcell2{white-space:nowrap}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script type="text/babel">
+const {useState, useEffect, useRef} = React;
+const D = "–";
+const USER_EX = ["Bitpanda","Phemex","Binance","Crypto.com"];
+
+const fmtPx=v=>v>=1?v.toFixed(2):v>=0.01?v.toFixed(4):Number(v).toPrecision(3);
+function abbr(n){ if(n==null) return D; const a=Math.abs(n);
+  if(a>=1e9) return '$'+(n/1e9).toFixed(2)+'B';
+  if(a>=1e6) return '$'+(n/1e6).toFixed(1)+'M';
+  if(a>=1e3) return '$'+(n/1e3).toFixed(0)+'k';
+  return '$'+n.toFixed(0); }
+const pf = v => v==null ? D : (v>=0?'+':'')+v.toFixed(1)+'%';
+function exchOn(name){ const n=(name||"").toLowerCase(); return USER_EX.some(u=>n.indexOf(u.toLowerCase())!==-1); }
+
+function CandleChart({data}){
+  const n=data.length; const W=680,H=230,padL=54,padR=10,padT=10,padB=22;
+  const L=padL,R=W-padR,T=padT,Bm=H-padB,PW=R-L,PH=Bm-T;
+  let lo=Infinity,hi=-Infinity; for(const d of data){ if(d.l<lo)lo=d.l; if(d.h>hi)hi=d.h; }
+  const sp=(hi-lo)||1, bw=PW/n;
+  const cx=i=>L+bw*(i+0.5), y=v=>Bm-((v-lo)/sp)*PH, bodyW=Math.max(1,bw*0.62);
+  const dd=ms=>{ const x=new Date(ms); return ("0"+x.getDate()).slice(-2)+"."+("0"+(x.getMonth()+1)).slice(-2)+"."; };
+  return (
+    <svg viewBox={"0 0 "+W+" "+H} width="100%" style={{display:"block"}}>
+      {[hi,(hi+lo)/2,lo].map((v,i)=>(<g key={i}>
+        <line x1={L} x2={R} y1={y(v)} y2={y(v)} stroke="#ffffff" strokeOpacity="0.06"/>
+        <text x={L-6} y={y(v)+3} textAnchor="end" fontSize="10" fill="#9aa0a8">${fmtPx(v)}</text>
+      </g>))}
+      {data.map((d,i)=>{ const up=d.c>=d.o, col=up?"#3ec07a":"#e35b5a", X=cx(i);
+        const yo=y(d.o),yc=y(d.c),top=Math.min(yo,yc),hh=Math.max(1,Math.abs(yo-yc));
+        return (<g key={i}>
+          <line x1={X} x2={X} y1={y(d.h)} y2={y(d.l)} stroke={col} strokeWidth="0.8"/>
+          <rect x={X-bodyW/2} y={top} width={bodyW} height={hh} fill={col}/>
+        </g>); })}
+      <text x={L} y={H-6} textAnchor="start" fontSize="10" fill="#9aa0a8">{dd(data[0].t)}</text>
+      <text x={R} y={H-6} textAnchor="end" fontSize="10" fill="#9aa0a8">{dd(data[n-1].t)}</text>
+    </svg>
+  );
+}
+function Info({text,side}){ return <span className="info" tabIndex={0} role="img" aria-label="Hilfe" onClick={e=>e.stopPropagation()}><span style={{pointerEvents:"none"}}>!</span><span className={"tip"+(side==="r"?" r":"")}>{text}</span></span>; }
+function Flag({c}){ if(!c) return <span>{D}</span>; const col=c==="red"?"#e35b5a":c==="amber"?"#EF9F27":"#3ec07a"; return <span className="dot" style={{background:col}}/>; }
+function zClass(v){ return v>=5?"zhi":v>=3?"zmid":""; }
+function fmClass(v){ return v>=3?"zhi":v>=1?"zmid":""; }
+function nowClass(v){ return v>=0.5?"zhi":v>=0.1?"zmid":""; }
+function spClass(v){ return v>=3?"zhi":v>=1.5?"zmid":""; }
+function computeFlag(c){
+  let s=0;
+  if(c.d1pct!=null){ if(c.d1pct>=50) s+=2; else if(c.d1pct>=20) s+=1; }
+  if(c.w1pct!=null && c.w1pct>=150) s+=1;
+  if(c.float!=null){ if(c.float<=50) s+=2; else if(c.float<=70) s+=1; }
+  if(c.fspike!=null && c.fspike>=3) s+=2; else if(c.fspike!=null && c.fspike>=1.5) s+=1;
+  if(c.volZ!=null){ if(c.volZ>=5) s+=2; else if(c.volZ>=3) s+=1; }
+  if(c.funding!=null && Math.abs(c.funding)>=0.05) s+=1;
+  return s>=3?"red":s>=1?"amber":"green";
+}
+
+const COLS=[["sym","Coin",""],["chain","Chain",""],["priceNum","Preis",""],["liq","Liq",""],["mcap","MCap",""],["fdv","FDV",""],
+["volZ","Vol-Z",""],["bs","B/S",""],["float","Float",""],
+["fnow","F jetzt",""],["f24","F 24h",""],["fspike","F-Spike",""],
+["funding","Funding",""],["flag","Flag",""],["d1h","Δ 1h",""],["d1pct","1 T",""],["w1pct","1 W",""],["m1pct","1 M",""]];
+const FILTERMODE={priceNum:"min",liq:"min",mcap:"min",fdv:"min",volZ:"min",bs:"min",float:"max",
+fnow:"min",f24:"min",fspike:"min",funding:"min",d1h:"min",d1pct:"min",w1pct:"min",m1pct:"min",flag:"select"};
+const HELP={priceNum:"Aktueller Kurs.",
+chain:"Blockchain des Coins (z. B. Ethereum, BSC, Solana, Base). Nur Coins mit Contract und DEX-Pool sind gelistet.",
+liq:"Liquidität des DEX-Pools in USD. Dünn = leicht manipulierbar. Sinkende Liquidität bei steigendem Kurs ist ein hartes Warnsignal!",
+mcap:"Marktkapitalisierung = Umlauf × Preis.",
+fdv:"Voll verwässerte Bewertung = Gesamtangebot × Preis. Große Lücke zu MCap = großer Überhang!",
+volZ:"Volumen relativ zum eigenen Schnitt. Über 5 = ungewöhnlicher Ausbruch! (füllt sich über die ersten Läufe)",
+bs:"Kauf-/Verkaufsdruck. In der Tabelle leer. Beim Aufklappen zeigt der Scam-Check die Käufe/Verkäufe aus dem DEX-Pool (Dexscreener); die Binance-Berechnung greift nur bei Coins, die dort handelbar sind.",
+float:"Anteil im Umlauf vs. Gesamt. Niedrig = viel Überhang bei Insidern, latentes Dump-Risiko!",
+fnow:"Float-Momentum jetzt: wie schnell der Umlauf gerade wächst, in % pro Stunde (seit dem letzten Update). Hoch = es wird gerade Angebot auf die Börsen geschoben!",
+f24:"Float-Momentum 24 h: wie stark der Umlauf über den Tag insgesamt gewachsen ist.",
+fspike:"Float-Spike: Vielfaches des typischen Umlauf-Tempos dieses Coins. Über 3 = ungewöhnlich starker Schub (Verteilung).",
+funding:"Perp-Finanzierungsrate, live im Browser von Binance. Meist leer — nur für Coins mit Binance-Perpetual, und in der EU seit dem Binance-Rückzug oft nicht abrufbar. Extrem = überfüllte Position, Squeeze-Gefahr.",
+flag:"Risiko-Ampel: rot = stark erhöht (z. B. parabolischer Lauf, niedriger Float, Funding-Extrem), gelb = erhöht, grün = unauffällig.",
+d1h:"Kursänderung in der letzten Stunde.",d1pct:"Kursänderung über 1 Tag.",w1pct:"Kursänderung über 1 Woche.",m1pct:"Kursänderung über 1 Monat."};
+
+function isEarly(c){
+  if(c.mcap==null||c.mcap<1e6||c.mcap>1e9) return false;
+  if(c.d1h==null||c.d1h<1) return false;
+  if(c.d1pct==null||c.d1pct<3||c.d1pct>80) return false;
+  if(c.liq!=null&&c.liq<50000) return false;
+  const actOK = (c.volZ!=null) ? c.volZ>=2 : (c.vmc!=null ? c.vmc>=0.2 : false);
+  return actOK;
+}
+function isDist(c){
+  if(c.float==null||c.float>60) return false;
+  if(!c.fsust) return false;
+  const pushing = (c.fspike!=null&&c.fspike>=1.5) || (c.fnow!=null&&c.fnow>=0.2);
+  if(!pushing) return false;
+  const vol = (c.volZ!=null&&c.volZ>=2) || (c.vmc!=null&&c.vmc>=0.4);
+  return vol;
+}
+
+const GP_CHAIN={ethereum:"1",bsc:"56",polygon:"137",arbitrum:"42161",base:"8453",optimism:"10",avalanche:"43114",fantom:"250",linea:"59144",scroll:"534352",mantle:"5000",opbnb:"204",zksync:"324"};
+function pctNum(x){ const n=parseFloat(x); return isNaN(n)?null:n; }
+function parseEvmScam(d){
+  const out=[];
+  out.push(d.is_honeypot==="1"?{label:"Honeypot!",level:"r"}:{label:"Kein Honeypot",level:"g"});
+  out.push(d.is_mintable==="1"?{label:"Mintbar",level:"r"}:{label:"Nicht mintbar",level:"g"});
+  if(d.hidden_owner==="1") out.push({label:"Versteckter Eigentümer",level:"r"});
+  else { const ren=!d.owner_address||/^0x0+$/i.test(d.owner_address)||/dead$/i.test(d.owner_address); out.push(ren?{label:"Eigentümer abgegeben",level:"g"}:{label:"Eigentümer aktiv",level:"a"}); }
+  const bt=pctNum(d.buy_tax), st=pctNum(d.sell_tax);
+  if(bt!=null||st!=null){ const b=Math.round((bt||0)*100), s=Math.round((st||0)*100); const mx=Math.max(b,s); out.push({label:"Steuer K/V "+b+"%/"+s+"%",level:mx>=10?"r":mx>0?"a":"g"}); }
+  if(d.transfer_pausable==="1") out.push({label:"Transfers pausierbar",level:"a"});
+  if(d.is_blacklisted==="1") out.push({label:"Blacklist-Funktion",level:"a"});
+  if(Array.isArray(d.lp_holders)&&d.lp_holders.length){ let locked=0; for(const h of d.lp_holders){ const p=pctNum(h.percent)||0; if(h.is_locked===1||h.is_locked==="1"||/burn|null|dead/i.test(h.tag||"")) locked+=p; } const lp=Math.round(locked*100); out.push({label:"LP gesperrt "+lp+"%",level:lp>=80?"g":lp>=30?"a":"r"}); }
+  if(Array.isArray(d.holders)&&d.holders.length){ let top=0,k=0; for(const h of d.holders){ if(k>=10)break; if(/lock|burn|null|dead/i.test(h.tag||""))continue; top+=pctNum(h.percent)||0; k++; } const t=Math.round(top*100); out.push({label:"Top-10-Halter "+t+"%",level:t>=50?"r":t>=30?"a":"g"}); }
+  if(d.holder_count) out.push({label:(+d.holder_count).toLocaleString("de-DE")+" Halter",level:""});
+  return out;
+}
+function parseSolScam(d){
+  const out=[];
+  const mint=d.mintable&&(d.mintable.status==="1"||d.mintable.status===1);
+  out.push(mint?{label:"Mint-Authority aktiv",level:"r"}:{label:"Mint abgegeben",level:"g"});
+  if(d.freezable&&(d.freezable.status==="1"||d.freezable.status===1)) out.push({label:"Freeze-Authority aktiv",level:"a"});
+  if(d.metadata_mutable&&d.metadata_mutable.status==="1") out.push({label:"Metadaten änderbar",level:"a"});
+  if(d.holder_count) out.push({label:(+d.holder_count).toLocaleString("de-DE")+" Halter",level:""});
+  if(out.length<=1) out.push({label:"Solana-Check eingeschränkt",level:""});
+  return out;
+}
+function Sparkline({series,color}){
+  const h=44,w=260,pad=3;
+  const pts=(series||[]).filter(p=>Array.isArray(p)&&p[1]!=null);
+  if(pts.length<2) return <div className="cap">Noch kein Verlauf — füllt sich über die nächsten Läufe.</div>;
+  const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+  const x0=Math.min.apply(null,xs),x1=Math.max.apply(null,xs),y0=Math.min.apply(null,ys),y1=Math.max.apply(null,ys);
+  const sx=t=>pad+(x1===x0?0:(t-x0)/(x1-x0))*(w-2*pad);
+  const sy=v=>h-pad-(y1===y0?0.5*(h-2*pad):((v-y0)/(y1-y0))*(h-2*pad));
+  const d=pts.map((p,i)=>(i?"L":"M")+sx(p[0]).toFixed(1)+" "+sy(p[1]).toFixed(1)).join(" ");
+  return <svg className="spark" width={w} height={h} viewBox={"0 0 "+w+" "+h}><path d={d} fill="none" stroke={color||"#5b8def"} strokeWidth="1.5"/></svg>;
+}
+function App(){
+  const [open,setOpen]=useState(null);
+  const [q,setQ]=useState("");
+  const [colF,setColF]=useState({});
+  const [sortKey,setSortKey]=useState("mcap"); const [sortDir,setSortDir]=useState("desc");
+  const [coins,setCoins]=useState(null); const [src,setSrc]=useState("");
+  const [det,setDet]=useState({sym:null});
+  const [view,setView]=useState(null);
+  const [liqHist,setLiqHist]=useState(null);
+  const [supHist,setSupHist]=useState(null);
+  const [sigEval,setSigEval]=useState(null);
+  const [showBreak,setShowBreak]=useState(false);
+  const fundedRef=useRef(false);
+
+  useEffect(()=>{
+    fetch("data/history-liquidity.json").then(r=>r.ok?r.json():{}).then(setLiqHist).catch(()=>setLiqHist({}));
+    fetch("data/history-supply.json").then(r=>r.ok?r.json():{}).then(setSupHist).catch(()=>setSupHist({}));
+    fetch("data/signal-eval.json").then(r=>r.ok?r.json():null).then(setSigEval).catch(()=>setSigEval(null));
+  },[]);
+
+  useEffect(()=>{ fetch("data/coins.json").then(r=>r.ok?r.json():Promise.reject()).then(j=>{
+    if(Array.isArray(j)){ const seen={}; const uniq=j.filter(c=>{ const s=(c.sym||""); if(!s||seen[s]) return false; seen[s]=1; return true; }); setCoins(uniq); setSrc("Live · keyless (CoinGecko + Dexscreener)"); } else setCoins([]);
+  }).catch(()=>setCoins([])); },[]);
+
+  // Funding live aus Binance (einmal, nach dem Laden) im Browser nachziehen
+  useEffect(()=>{
+    if(!coins || fundedRef.current) return; fundedRef.current=true;
+    fetch("https://fapi.binance.com/fapi/v1/premiumIndex").then(r=>r.ok?r.json():Promise.reject()).then(arr=>{
+      if(!Array.isArray(arr)) return;
+      const map={};
+      arr.forEach(x=>{ const s=x.symbol||""; if(s.slice(-4)==="USDT"){ const base=s.slice(0,-4); const f=parseFloat(x.lastFundingRate); if(!isNaN(f)) map[base]=Math.round(f*100*1000)/1000; } });
+      setCoins(cs=> cs ? cs.map(c=> map[c.sym]!=null ? Object.assign({},c,{funding:map[c.sym]}) : c) : cs);
+    }).catch(()=>{});
+  },[coins]);
+
+  useEffect(()=>{
+    if(!open||!coins){ return; }
+    const co=coins.find(c=>c.sym===open); if(!co){ return; }
+    let cancelled=false; setDet({sym:open, loading:true});
+    (async()=>{
+      let candles=null, csrc="", bs=null;
+      try{
+        const r=await fetch("https://data-api.binance.vision/api/v3/klines?symbol="+co.sym+"USDT&interval=1h&limit=168");
+        if(r.ok){ const k=await r.json(); if(Array.isArray(k)&&k.length){
+          candles=k.map(x=>({t:+x[0],o:+x[1],h:+x[2],l:+x[3],c:+x[4]})); csrc="Binance · 1-Stunden-Kerzen (7 Tage)";
+          let buy=0,tot=0; for(const x of k){ buy+=parseFloat(x[9])||0; tot+=parseFloat(x[5])||0; } const sell=tot-buy; if(sell>0) bs=Math.round((buy/sell)*100)/100;
+        } }
+      }catch(e){}
+      if(!candles && co.id){
+        try{
+          const r=await fetch("https://api.coingecko.com/api/v3/coins/"+co.id+"/ohlc?vs_currency=usd&days=7");
+          if(r.ok){ const k=await r.json(); if(Array.isArray(k)&&k.length){ candles=k.map(x=>({t:x[0],o:x[1],h:x[2],l:x[3],c:x[4]})); csrc="CoinGecko · 4-Stunden-Kerzen (7 Tage)"; } }
+        }catch(e){}
+      }
+      let exch=null;
+      if(co.id){
+        try{
+          const r=await fetch("https://api.coingecko.com/api/v3/coins/"+co.id+"/tickers");
+          if(r.ok){ const j=await r.json(); const seen={}; const names=[];
+            (j.tickers||[]).forEach(t=>{ const nm=t.market&&t.market.name; if(nm&&!seen[nm]){ seen[nm]=1; names.push(nm); } });
+            names.sort((a,b)=>(exchOn(b)?1:0)-(exchOn(a)?1:0)); exch=names; }
+        }catch(e){}
+      }
+      let scam=null;
+      try{
+        if(co.addr && co.chain==="solana"){
+          const r=await fetch("https://api.gopluslabs.io/api/v1/solana/token_security?contract_addresses="+co.addr);
+          if(r.ok){ const j=await r.json(); const res=j.result||{}; const d=res[co.addr]||Object.values(res)[0]; if(d) scam=parseSolScam(d); }
+        } else if(co.addr && GP_CHAIN[co.chain]){
+          const a=co.addr.toLowerCase();
+          const r=await fetch("https://api.gopluslabs.io/api/v1/token_security/"+GP_CHAIN[co.chain]+"?contract_addresses="+a);
+          if(r.ok){ const j=await r.json(); const d=(j.result||{})[a]; if(d) scam=parseEvmScam(d); }
+        }
+      }catch(e){}
+      if(!cancelled) setDet({sym:open, loading:false, candles, csrc, bs, exch, scam});
+    })();
+    return ()=>{ cancelled=true; };
+  },[open,coins]);
+
+  const setF=(k,v)=>setColF(p=>{ const n=Object.assign({},p); n[k]=v; return n; });
+  const num=v=>{ if(v===undefined||v==="") return null; const n=parseFloat(String(v).replace(",",".")); return isNaN(n)?null:n; };
+  const onSort=k=>{ if(k===sortKey){ setSortDir(sortDir==="asc"?"desc":"asc"); } else { setSortKey(k); setSortDir(k==="sym"?"asc":"desc"); } };
+  const toggleView=(v)=>{ const nv=view===v?null:v; setView(nv); if(nv==="early"){ setSortKey("d1h"); setSortDir("desc"); } else if(nv==="dist"){ setSortKey("fspike"); setSortDir("desc"); } };
+
+  const loaded = coins!==null;
+  const base = coins||[];
+  const hasData={}; for(const k in FILTERMODE){ hasData[k] = k==="flag" ? true : base.some(c=>c[k]!=null); }
+
+  const withFlags=base.map(c=>Object.assign({},c,{flag:computeFlag(c)}));
+  let rows=withFlags.filter(c=>{
+    if(view==="early" && !isEarly(c)) return false;
+    if(view==="dist" && !isDist(c)) return false;
+    if(q && (c.sym||"").toLowerCase().indexOf(q.toLowerCase().trim())===-1) return false;
+    for(const k in FILTERMODE){
+      const mode=FILTERMODE[k], raw=colF[k];
+      if(mode==="select"){ if(raw && raw!=="all" && c[k]!==raw) return false; continue; }
+      const t=num(raw); if(t===null) continue;
+      const v=c[k]; if(v==null) return false;
+      if(mode==="min" && v<t) return false;
+      if(mode==="max" && v>t) return false;
+    }
+    return true;
+  });
+  const rank={red:3,amber:2,green:1};
+  rows=rows.slice().sort((a,b)=>{
+    const dir=sortDir==="asc"?1:-1;
+    if(sortKey==="sym") return dir*String(a.sym).localeCompare(String(b.sym));
+    let av=sortKey==="flag"?rank[a.flag]:a[sortKey], bv=sortKey==="flag"?rank[b.flag]:b[sortKey];
+    if(av==null&&bv==null) return 0; if(av==null) return 1; if(bv==null) return -1;
+    return dir*(av-bv);
+  });
+  const MAX=300; const shown=rows.slice(0,MAX);
+
+  return (
+    <div className="wrap">
+      <p className="title">SignalDesk · Float-Screener</p>
+      <p className="subtitle">Suche · filtern/sortieren über den Tabellenkopf · Zeile anklicken für Kurs, Kauf/Verkauf &amp; Handelsplätze</p>
+      <div className="chips">{USER_EX.map(p=>(<span key={p} className="chip on">{p}</span>))}</div>
+      <div className="searchbar">
+        <input placeholder="Suche nach Name…" value={q} onChange={e=>setQ(e.target.value)}/>
+        <span className={"chip tog"+(view==="early"?" on":"")} onClick={()=>toggleView("early")}>Frühe Bewegung</span>
+        <span className={"chip tog"+(view==="dist"?" on":"")} onClick={()=>toggleView("dist")}>Verteilungswarnung</span>
+      </div>
+      <p className="count">{!loaded ? "Lade Daten…" : (base.length+" Coins · "+rows.length+" nach Filter"+(rows.length>MAX?" · zeige erste "+MAX:"")+" · Quelle: "+src)}</p>
+      {view==="early" ? <p className="count">Frühe Bewegung: MCap 1 Mio.–1 Mrd., 1 h ≥ +1 %, 24 h +3…+80 %, Volumen-Z ≥ 2 (Mini-Pools raus) — sortiert nach 1 h.</p> : null}
+      {view==="dist" ? <p className="count">Verteilungswarnung: Float ≤ 60 %, Umlauf-Anstieg über 2 Schnappschüsse bestätigt (F-Spike ≥ 1,5 oder F jetzt ≥ 0,2 %/h) und erhöhtes Volumen — sortiert nach F-Spike.</p> : null}
+
+      {sigEval ? (()=>{
+        const H=sigEval.horizons||[6,24,72];
+        const fmt=v=>v==null?"–":(v>=0?"+":"")+v+"%";
+        const cell=(type,h,dist)=>{ const s=(sigEval[type]||{})[h]||{}; const second=dist?(s.pos!=null?(100-s.pos)+"% gefallen":"–"):(s.hit!=null?s.hit+"% >+10%":"–"); return <span key={h} className="evcell">{h}h {fmt(s.median)} · {second} (n={s.n||0})</span>; };
+        return <div className="evalpanel">
+          <div className="evhead">Signal-Auswertung — misst, ob Signale echten Kursanstiegen vorausgehen</div>
+          <div className="evrow"><b>Frühe Bewegung</b>{H.map(h=>cell("early",h,false))}</div>
+          <div className="evrow"><b>Verteilungswarnung</b>{H.map(h=>cell("dist",h,true))}</div>
+          <p className="cap">Median-Kursänderung nach 6/24/72 h ab Signalzeitpunkt. Bei „Frühe Bewegung" ist ein positiver Median gut, bei „Verteilungswarnung" ein negativer (Warnung berechtigt). Kleine n = noch nicht belastbar, füllt sich über Wochen.</p>
+          {sigEval.break ? <div className="evtog" onClick={()=>setShowBreak(!showBreak)}>{showBreak?"▾":"▸"} Aufschlüsselung nach Kennzahl (24 h)</div> : null}
+          {showBreak && sigEval.break ? <div className="evbreak">
+            {["early","dist"].map(type=>(
+              <div key={type} className="evbrsec">
+                <div className="evbrhead">{type==="early"?"Frühe Bewegung":"Verteilungswarnung"}</div>
+                {(sigEval.break[type]||[]).map(fb=>(
+                  <div key={fb.feat} className="evrow2">
+                    {fb.buckets.map(b=>{ const second=type==="dist"?(b.pos!=null?(100-b.pos)+"% gef.":"–"):(b.hit!=null?b.hit+"% >+10%":"–"); return <span key={b.label} className="evcell2">{b.label}: {b.median==null?"–":(b.median>=0?"+":"")+b.median+"%"} · {second} (n={b.n})</span>; })}
+                  </div>
+                ))}
+              </div>
+            ))}
+            <p className="cap">Je Kennzahl-Bereich: Median-Rendite, Trefferquote (bzw. Anteil gefallen) und Fallzahl. Zeigt, ab welcher Schwelle sich ein Signal lohnt.</p>
+          </div> : null}
+        </div>;
+      })() : null}
+
+      {!loaded ? (
+        <div className="card"><div className="empty">Lade Daten…</div></div>
+      ) : base.length===0 ? (
+        <div className="card"><div className="empty">Noch keine Live-Daten gefunden.<br/>Starte die GitHub-Action („Run workflow"), damit <code>data/coins.json</code> erzeugt wird.</div></div>
+      ) : (
+        <div className="card">
+          <table className="scr">
+            <thead>
+              <tr>{COLS.map((c,idx)=>(
+                <th key={c[0]} className={c[2]} onClick={()=>onSort(c[0])}>
+                  {c[1]}{sortKey===c[0]?(sortDir==="asc"?" ▲":" ▼"):""}
+                  {HELP[c[0]]?<Info text={HELP[c[0]]} side={idx>=9?"r":"l"}/>:null}
+                </th>
+              ))}</tr>
+              <tr className="filt">{COLS.map(c=>{ const k=c[0],mode=FILTERMODE[k];
+                if(!mode) return <th key={k} className={c[2]}></th>;
+                if(mode==="select") return (<th key={k} className={c[2]}>
+                  <select className="fin sel" value={colF.flag||"all"} onChange={e=>setF("flag",e.target.value)}>
+                    <option value="all">alle</option><option value="red">rot</option><option value="amber">gelb</option><option value="green">grün</option>
+                  </select></th>);
+                return <th key={k} className={c[2]}><input className="fin" type="text" inputMode="decimal" disabled={!hasData[k]} title={hasData[k]?"":"noch keine Daten"} placeholder={hasData[k]?(mode==="max"?"≤":"≥"):"—"} value={colF[k]||""} onChange={e=>setF(k,e.target.value)}/></th>;
+              })}</tr>
+            </thead>
+            <tbody>
+              {rows.length===0 ? <tr><td className="empty" colSpan={COLS.length}>Keine Coins passen{view==="early"?" zur „Frühe Bewegung\u201c-Auswahl":view==="dist"?" zur „Verteilungswarnung\u201c-Auswahl":" zu den Filtern"}.</td></tr> : shown.map(co=>{
+                const isOpen=open===co.sym; const dd=det.sym===co.sym?det:null;
+                return (
+                  <React.Fragment key={co.sym}>
+                    <tr className={"row"+(isOpen?" open":"")} onClick={()=>setOpen(isOpen?null:co.sym)}>
+                      <td className="sym"><span className="chev" style={{transform:isOpen?"rotate(90deg)":"none"}}>▸</span>{co.sym}</td>
+                      <td><span className="chainbadge">{co.chain||D}</span>{co.dexOnly?<span className="dexonly">DEX</span>:null}</td>
+                      <td>{co.priceStr||(co.priceNum!=null?"$"+co.priceNum:D)}</td>
+                      <td>{abbr(co.liq)}</td>
+                      <td>{abbr(co.mcap)}</td>
+                      <td>{abbr(co.fdv)}</td>
+                      <td>{co.volZ==null?D:(zClass(co.volZ)?<span className={zClass(co.volZ)}>{co.volZ.toFixed(1)}</span>:co.volZ.toFixed(1))}</td>
+                      <td>{co.bs==null?D:co.bs.toFixed(2)}</td>
+                      <td>{co.float==null?D:co.float+"%"}</td>
+                      <td>{co.fnow==null?D:(nowClass(co.fnow)?<span className={nowClass(co.fnow)}>{(co.fnow>=0?"+":"")+co.fnow.toFixed(2)+"%"}</span>:(co.fnow>=0?"+":"")+co.fnow.toFixed(2)+"%")}</td>
+                      <td>{co.f24==null?D:(fmClass(co.f24)?<span className={fmClass(co.f24)}>{pf(co.f24)}</span>:pf(co.f24))}</td>
+                      <td>{co.fspike==null?D:(spClass(co.fspike)?<span className={spClass(co.fspike)}>{co.fspike.toFixed(1)+"\u00d7"}</span>:co.fspike.toFixed(1)+"\u00d7")}</td>
+                      <td className={co.funding==null?"":(co.funding>0?"pos":co.funding<0?"neg":"mut")}>{co.funding==null?D:(co.funding>0?"+":"")+co.funding.toFixed(3)+"%"}</td>
+                      <td><Flag c={co.flag}/></td>
+                      <td className={co.d1h>=0?"pos":"neg"}>{pf(co.d1h)}</td>
+                      <td className={co.d1pct>=0?"pos":"neg"}>{pf(co.d1pct)}</td>
+                      <td className={co.w1pct>=0?"pos":"neg"}>{pf(co.w1pct)}</td>
+                      <td className={co.m1pct>=0?"pos":"neg"}>{pf(co.m1pct)}</td>
+                    </tr>
+                    {isOpen ? (
+                      <tr className="detail"><td colSpan={COLS.length}>
+                        <div className="detailwrap">
+                          <div className="sub" style={{marginTop:0}}>Kurs · 7 Tage</div>
+                          {dd && dd.loading ? <div className="note">Lade Kursverlauf…</div>
+                            : dd && dd.candles ? <React.Fragment>
+                                <CandleChart data={dd.candles}/>
+                                <div className="cap">{dd.csrc}</div>
+                                {dd.bs!=null ? <div className="cap">Kauf-/Verkaufsdruck (7 Tage): <span className={dd.bs>=1?"pos":"neg"}>{dd.bs.toFixed(2)}</span> · {dd.bs>=1?"mehr Käufer":"mehr Verkäufer"}{co.funding!=null?" · Funding: "+(co.funding>0?"+":"")+co.funding.toFixed(3)+"%":""}</div> : null}
+                              </React.Fragment>
+                            : <div className="note">Kursverlauf nicht verfügbar (evtl. nicht auf Binance gelistet oder API-Limit erreicht).</div>}
+
+                          <div className="sub">Scam-Check</div>
+                          {dd && dd.loading ? <div className="note">Prüfe Contract…</div>
+                            : dd && dd.scam && dd.scam.length ? <React.Fragment>
+                                <div className="scam">{dd.scam.map((s,i)=>(<span key={i} className={"sc "+(s.level||"")}>{s.label}</span>))}</div>
+                                <div className="cap">Quelle: GoPlus + Dexscreener · nur Indizien, keine Garantie.</div>
+                              </React.Fragment>
+                            : <div className="note">Kein Contract-Check verfügbar (Chain nicht unterstützt oder API-Limit).</div>}
+                          {(co.liq!=null||co.pairAgeH!=null||co.volLiq!=null||co.buys!=null) ? <div className="scam">
+                              {co.liq!=null?<span className="sc">Liq {abbr(co.liq)}</span>:null}
+                              {co.pairAgeH!=null?<span className={"sc "+(co.pairAgeH<24?"a":"")}>Paar-Alter {co.pairAgeH<48?co.pairAgeH+" h":Math.round(co.pairAgeH/24)+" Tage"}</span>:null}
+                              {co.volLiq!=null?<span className={"sc "+(co.volLiq>=10?"r":co.volLiq>=3?"a":"")}>Vol/Liq {co.volLiq}×</span>:null}
+                              {(co.buys!=null&&co.sells!=null)?<span className={"sc "+(co.sells>co.buys*2?"a":"")}>Käufe/Verkäufe {co.buys}/{co.sells}</span>:null}
+                            </div> : null}
+
+                          <div className="sub">Liquidität · Verlauf</div>
+                          <Sparkline series={(liqHist&&liqHist[co.key])||[]} color="#5b8def"/>
+                          {supHist && supHist[co.key] && supHist[co.key].length>1 ? <React.Fragment>
+                            <div className="sub">Umlauf · Verlauf</div>
+                            <Sparkline series={supHist[co.key]} color="#EF9F27"/>
+                          </React.Fragment> : null}
+
+                          <div className="sub">Handelbar auf</div>
+                          {dd && dd.loading ? <div className="note">Lade Handelsplätze…</div>
+                            : dd && dd.exch && dd.exch.length ? <div className="exwrap">{dd.exch.slice(0,20).map((nm,i)=>(<span key={i} className={"ex"+(exchOn(nm)?" on":"")}>{nm}</span>))}</div>
+                            : <div className="note">Keine Handelsplätze gefunden.</div>}
+                        </div>
+                      </td></tr>
+                    ) : null}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
