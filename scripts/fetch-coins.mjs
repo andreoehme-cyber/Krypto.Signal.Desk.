@@ -19,6 +19,8 @@ const SUP_HIST = `${DATA}/history-supply.json`;   // { key: [[t, circ], ...] }
 const LIQ_HIST = `${DATA}/history-liquidity.json`;// { key: [[t, liqUsd], ...] }
 const ALERTS   = `${DATA}/alerts-sent.json`;      // { "type:sym": ts }
 const CMAP     = `${DATA}/contract-map.json`;     // Cache: { id: [{chain, addr}] } (Referenzdaten)
+const SIGLOG   = `${DATA}/signal-log.json`;       // [{t,key,sym,type,entry,feats,r,done}] Signal-Logbuch
+const SIGEVAL  = `${DATA}/signal-eval.json`;      // Aggregierte Auswertung fürs Dashboard
 
 const KEEP     = 48;
 const MIN_Z    = 6;
@@ -176,17 +178,19 @@ async function freshTokens() {
 
 // ---- Signale (bewusst empfindlich eingestellt: lieber einmal zu oft melden) --
 function isEarly(c) {
-  if (c.mcap == null || c.mcap < 1e5 || c.mcap > 1e9) return false;   // 100k–1 Mrd.
-  if (c.d1h == null || c.d1h < 0.5) return false;                     // ab +0,5 %/1h
-  if (c.d1pct == null || c.d1pct < 0.5 || c.d1pct > 80) return false; // 24h 0,5–80 %
-  const actOK = (c.volZ != null) ? c.volZ >= 1 : (c.vmc != null ? c.vmc >= 0.1 : true);
+  if (c.mcap == null || c.mcap < 1e6 || c.mcap > 1e9) return false;   // 1 Mio.–1 Mrd.
+  if (c.d1h == null || c.d1h < 1) return false;                        // ab +1 %/1h
+  if (c.d1pct == null || c.d1pct < 3 || c.d1pct > 80) return false;    // 24h 3–80 %
+  if (c.liq != null && c.liq < 50000) return false;                    // keine Mini-Pools
+  const actOK = (c.volZ != null) ? c.volZ >= 2 : (c.vmc != null ? c.vmc >= 0.2 : false);
   return actOK;
 }
 function isDist(c) {
-  if (c.float == null || c.float > 70) return false;                  // bis 70 % Float
+  if (c.float == null || c.float > 60) return false;                   // bis 60 % Float
+  if (!c.fsust) return false;                                          // Umlauf-Anstieg über 2 Schnappschüsse bestätigt
   const pushing = (c.fspike != null && c.fspike >= 1.5) || (c.fnow != null && c.fnow >= 0.2);
   if (!pushing) return false;
-  const vol = (c.volZ != null && c.volZ >= 1.5) || (c.vmc != null && c.vmc >= 0.3);
+  const vol = (c.volZ != null && c.volZ >= 2) || (c.vmc != null && c.vmc >= 0.4);
   return vol;
 }
 
@@ -283,7 +287,7 @@ async function main() {
     const circ  = base.circ;
     const total = base.total;
     const float = (total && circ) ? Math.round((circ / total) * 100) : (base.float != null ? base.float : null);
-    let fnow = null, f24 = null, fspike = null;
+    let fnow = null, f24 = null, fspike = null, fsust = false;
     if (circ != null) {
       let sh = (supHist[key] || []).filter((e) => Array.isArray(e)).slice(-KEEP);
       const last = sh.length ? sh[sh.length - 1] : null;
@@ -291,6 +295,13 @@ async function main() {
       const rates = [];
       for (let i = 1; i < sh.length; i++) { const a = sh[i-1], b = sh[i]; const dth = (b[0]-a[0])/3600000; if (a[1] > 0 && dth > 0.05) rates.push((b[1]-a[1])/a[1]*100/dth); }
       if (rates.length >= 4 && fnow != null) { const abs = rates.map(Math.abs).sort((x,y)=>x-y); const med = abs[Math.floor(abs.length/2)] || 0; fspike = Math.round((Math.abs(fnow) / Math.max(med, 0.02)) * 10) / 10; }
+      // fsust: Umlauf-Anstieg über die letzten ZWEI Intervalle bestätigt (filtert einmalige CoinGecko-Korrekturen)
+      if (sh.length >= 2 && fnow != null && fnow >= 0.1) {
+        const p2 = sh[sh.length - 2], p1 = sh[sh.length - 1];
+        const dthPrev = (p1[0] - p2[0]) / 3600000;
+        const ratePrev = (p2[1] > 0 && dthPrev > 0.05) ? (p1[1] - p2[1]) / p2[1] * 100 / dthPrev : null;
+        if (ratePrev != null && ratePrev >= 0.1) fsust = true;
+      }
       const target = now - 24*3600000; let bst = null, bd = Infinity;
       for (const e of sh) { const d = Math.abs(e[0] - target); if (d < bd) { bd = d; bst = e; } }
       if (bst) { const ageH = (now - bst[0]) / 3600000; if (bst[1] > 0 && ageH >= 12) f24 = round1((circ - bst[1]) / bst[1] * 100); }
@@ -306,7 +317,7 @@ async function main() {
       priceStr: priceStr(priceNum), priceNum,
       liq, mcap, fdv, float, vmc,
       volZ, bs: null, funding: null,
-      fnow, f24, fspike,
+      fnow, f24, fspike, fsust,
       pairAgeH, buys, sells, volLiq, vol24,
       flag,
       d1h: base.d1h, d1pct: base.d1pct, w1pct: base.w1pct, m1pct: base.m1pct,
@@ -345,6 +356,85 @@ async function main() {
   writeFileSync(LIQ_HIST, JSON.stringify(liqHist));
   writeFileSync(OUT, JSON.stringify(coins));
   console.log('wrote ' + coins.length + ' coins (' + Object.keys(cgByKey).length + ' CG + fresh) to ' + OUT);
+
+  // ---- Signal-Auswertung: Log + Ausgänge nach 6/24/72 h ---------------------
+  const HORIZONS = [6, 24, 72];
+  const siglogRaw = load(SIGLOG);
+  const siglog = Array.isArray(siglogRaw) ? siglogRaw : [];
+  const priceByKey = {}; for (const c of coins) priceByKey[c.key] = c.priceNum;
+
+  // 1) neue Beobachtungen öffnen (max. eine offene je Typ+Coin)
+  const openSet = new Set(siglog.filter((o) => !o.done).map((o) => o.type + ':' + o.key));
+  const logSig = (type, c) => {
+    const id = type + ':' + c.key;
+    if (openSet.has(id) || c.priceNum == null || c.priceNum <= 0) return;
+    openSet.add(id);
+    siglog.push({ t: now, key: c.key, sym: c.sym, type, entry: c.priceNum,
+      feats: { d1h: c.d1h, d1pct: c.d1pct, volZ: c.volZ, vmc: c.vmc, fnow: c.fnow, fspike: c.fspike, float: c.float, liq: c.liq },
+      r: {}, done: false });
+  };
+  for (const c of coins) { if (isEarly(c)) logSig('early', c); if (isDist(c)) logSig('dist', c); }
+
+  // 2) offene Beobachtungen auflösen (Vorwärts-Rendite je Horizont)
+  for (const o of siglog) {
+    if (o.done) continue;
+    const ageH = (now - o.t) / 3600000;
+    for (const h of HORIZONS) {
+      if (o.r[h] !== undefined) continue;
+      if (ageH >= h) {
+        const p = priceByKey[o.key];
+        o.r[h] = (p != null && p > 0 && o.entry > 0) ? Math.round(((p - o.entry) / o.entry * 100) * 10) / 10 : null; // null = Coin nicht mehr in Liste
+      }
+    }
+    if (ageH >= HORIZONS[HORIZONS.length - 1]) o.done = true;
+  }
+
+  // 3) Logbuch begrenzen: alle offenen + letzte 3000 erledigten
+  const finalLog = siglog.filter((o) => !o.done).concat(siglog.filter((o) => o.done).slice(-3000));
+  writeFileSync(SIGLOG, JSON.stringify(finalLog));
+
+  // 4) aggregieren
+  const median = (arr) => { if (!arr.length) return null; const s = [...arr].sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : Math.round((s[m-1] + s[m]) / 2 * 10) / 10; };
+  const summarize = (type) => {
+    const out = {};
+    for (const h of HORIZONS) {
+      const attempted = finalLog.filter((o) => o.type === type && o.r[h] !== undefined);
+      const vals = attempted.filter((o) => o.r[h] !== null).map((o) => o.r[h]);
+      out[h] = {
+        n: vals.length,
+        median: median(vals),
+        hit: vals.length ? Math.round(vals.filter((v) => v > 10).length / vals.length * 100) : null,
+        pos: vals.length ? Math.round(vals.filter((v) => v > 0).length / vals.length * 100) : null,
+        dropped: attempted.length - vals.length,
+      };
+    }
+    return out;
+  };
+  // Aufschlüsselung nach Kennzahl (Referenz-Horizont 24 h): zeigt, welche Schwelle sich lohnt
+  const BREAK_H = 24;
+  const BREAK = {
+    early: [
+      { feat: 'volZ',  ranges: [[2,3,'Vol-Z 2–3'],[3,5,'Vol-Z 3–5'],[5,1e9,'Vol-Z ≥5']] },
+      { feat: 'd1pct', ranges: [[3,10,'24h 3–10%'],[10,25,'24h 10–25%'],[25,50,'24h 25–50%'],[50,80,'24h 50–80%']] },
+      { feat: 'mcap',  ranges: [[1e6,1e7,'MCap 1–10M'],[1e7,5e7,'MCap 10–50M'],[5e7,2e8,'MCap 50–200M'],[2e8,1e9,'MCap ≥200M']] },
+    ],
+    dist: [
+      { feat: 'fspike', ranges: [[1.5,3,'Spike 1,5–3'],[3,5,'Spike 3–5'],[5,1e9,'Spike ≥5']] },
+      { feat: 'float',  ranges: [[0,20,'Float ≤20'],[20,40,'Float 20–40'],[40,60,'Float 40–60']] },
+      { feat: 'volZ',   ranges: [[0,2,'Vol-Z <2'],[2,4,'Vol-Z 2–4'],[4,1e9,'Vol-Z ≥4']] },
+    ],
+  };
+  const breakdown = (type) => BREAK[type].map((cfg) => ({
+    feat: cfg.feat,
+    buckets: cfg.ranges.map(([mn, mx, label]) => {
+      const vals = finalLog.filter((o) => o.type === type && o.r[BREAK_H] != null && o.feats && o.feats[cfg.feat] != null && o.feats[cfg.feat] >= mn && o.feats[cfg.feat] < mx).map((o) => o.r[BREAK_H]);
+      return { label, n: vals.length, median: median(vals),
+        pos: vals.length ? Math.round(vals.filter((v) => v > 0).length / vals.length * 100) : null,
+        hit: vals.length ? Math.round(vals.filter((v) => v > 10).length / vals.length * 100) : null };
+    }),
+  }));
+  writeFileSync(SIGEVAL, JSON.stringify({ generatedAt: now, horizons: HORIZONS, breakHorizon: BREAK_H, early: summarize('early'), dist: summarize('dist'), break: { early: breakdown('early'), dist: breakdown('dist') } }));
+  console.log('Signal-Auswertung: ' + finalLog.filter((o) => !o.done).length + ' offen, ' + finalLog.filter((o) => o.done).length + ' erledigt');
 
   // ---- Alerts -> Telegram ---------------------------------------------------
   const sentMap = load(ALERTS);
